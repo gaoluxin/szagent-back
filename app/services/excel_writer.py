@@ -129,7 +129,7 @@ class ExcelWriter:
             mapping = {
                 "名称*": subsystem.name,
                 "制造厂家*": subsystem.manufacturer,
-                "型号*": subsystem.rated_capacity,
+                "型号*": subsystem.model,
                 "额定容量*": subsystem.rated_capacity,
                 "额定功率*": subsystem.rated_power,
                 "所属升压站进线名称*": subsystem.incoming_line_name,

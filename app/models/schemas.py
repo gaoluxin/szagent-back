@@ -25,6 +25,7 @@ class SubsystemInfo(BaseModel):
     serial_number: int
     name: str
     manufacturer: str
+    model: str = ""
     rated_capacity: str
     rated_power: str
     equipment_structure: str = ""
