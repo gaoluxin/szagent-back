@@ -38,6 +38,7 @@ class ExcelWriter:
     def write_customer_data(self, customer_data: CustomerData, output_filename: str) -> str:
         self._write_station_sheet(customer_data)
         self._write_physical_station_sheet(customer_data)
+        self._write_energy_storage_system_sheet(customer_data)
 
         output_path = OUTPUT_DIR / output_filename
         self.wb.save(output_path)
@@ -107,6 +108,77 @@ class ExcelWriter:
                 sheet.cell(row=data_row, column=col_idx, value=station.longitude)
             elif header == "纬度*":
                 sheet.cell(row=data_row, column=col_idx, value=station.latitude)
+
+    def _write_energy_storage_system_sheet(self, customer_data: CustomerData):
+        sheet = self.sheets.get("2-储能系统")
+        if not sheet:
+            logger.warning("未找到2-储能系统sheet页")
+            return
+
+        header_row = 3
+        headers = []
+        for cell in sheet[header_row]:
+            if cell.value:
+                headers.append(str(cell.value).strip())
+
+        data_start_row = 4
+        for subsystem in customer_data.subsystems:
+            pcs_connection_type = self._get_pcs_connection_type(subsystem.equipment_structure)
+            system_composition = self._get_system_composition(subsystem)
+
+            mapping = {
+                "名称*": subsystem.name,
+                "制造厂家*": subsystem.manufacturer,
+                "型号*": subsystem.rated_capacity,
+                "额定容量*": subsystem.rated_capacity,
+                "额定功率*": subsystem.rated_power,
+                "所属升压站进线名称*": subsystem.incoming_line_name,
+                "PCS连接形式*": pcs_connection_type,
+                "序号*": str(subsystem.serial_number),
+                "Scada别名": "",
+                "已接入系统构成*": system_composition,
+                "模型ID": ""
+            }
+
+            for col_idx, header in enumerate(headers, start=1):
+                if header in mapping:
+                    sheet.cell(row=data_start_row, column=col_idx, value=mapping[header])
+                    logger.debug(f"写入{header}: {mapping[header]}")
+
+            data_start_row += 1
+
+    def _get_pcs_connection_type(self, equipment_structure: str) -> str:
+        structure_map = {
+            "系统模式1": "集中式PCS",
+            "系统模式2": "组串式PCS",
+            "系统模式3": "分散式"
+        }
+        return structure_map.get(equipment_structure, "")
+
+    def _get_system_composition(self, subsystem) -> str:
+        composition_parts = ["ESSVIEW"]
+
+        if subsystem.battery_cluster_count and subsystem.battery_cluster_count.strip() and subsystem.battery_cluster_count.strip() != "0":
+            composition_parts.append("DC")
+
+        if subsystem.pcs_count and subsystem.pcs_count.strip() and subsystem.pcs_count.strip() != "0":
+            composition_parts.append("AC")
+
+        has_air_cooler = subsystem.air_cooler_count and subsystem.air_cooler_count.strip() and subsystem.air_cooler_count.strip() != "0"
+        has_liquid_cooler = subsystem.liquid_cooler_count and subsystem.liquid_cooler_count.strip() and subsystem.liquid_cooler_count.strip() != "0"
+        if has_air_cooler or has_liquid_cooler:
+            composition_parts.append("ThermalSystem")
+
+        has_fire_host = subsystem.fire_host_count and subsystem.fire_host_count.strip() and subsystem.fire_host_count.strip() != "0"
+        has_fire_detector = subsystem.fire_detector_count and subsystem.fire_detector_count.strip() and subsystem.fire_detector_count.strip() != "0"
+        has_fire_suppressor = subsystem.fire_suppressor_count and subsystem.fire_suppressor_count.strip() and subsystem.fire_suppressor_count.strip() != "0"
+        if has_fire_host or has_fire_detector or has_fire_suppressor:
+            composition_parts.append("FireSuppressionSystem")
+
+        if subsystem.battery_bank_count and subsystem.battery_bank_count.strip() and subsystem.battery_bank_count.strip() != "0":
+            composition_parts.append("BatteryBankView")
+
+        return ",".join(composition_parts)
 
     def close(self):
         self.wb.close()

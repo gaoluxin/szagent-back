@@ -133,10 +133,25 @@ class ExcelReader:
 
             subsystem = SubsystemInfo(
                 serial_number=serial_number,
-                name=row_data.get("名称", ""),
+                name=row_data.get("储能系统名称", ""),
                 manufacturer=row_data.get("制造厂家", ""),
                 rated_capacity=row_data.get("额定容量", ""),
-                rated_power=row_data.get("额定功率", "")
+                rated_power=row_data.get("额定功率", ""),
+                equipment_structure=row_data.get("设备结构", ""),
+                incoming_line_name=row_data.get("所属升压站进线名称", ""),
+                transformer_count=row_data.get("箱变数量", ""),
+                pcs_count=row_data.get("变流器数量", ""),
+                battery_bank_count=row_data.get("电池组数量", ""),
+                battery_cluster_count=row_data.get("电池簇数量", ""),
+                energy_meter_count=row_data.get("储能表数量", ""),
+                auxiliary_meter_count=row_data.get("辅电表数量", ""),
+                air_conditioner_structure=row_data.get("空调设备结构", ""),
+                air_cooler_count=row_data.get("风冷空调数量", ""),
+                liquid_cooler_count=row_data.get("液冷空调数量", ""),
+                fire_suppression_structure=row_data.get("消防设备结构", ""),
+                fire_host_count=row_data.get("主机数量", ""),
+                fire_detector_count=row_data.get("探测器数量", ""),
+                fire_suppressor_count=row_data.get("抑制机数量", "")
             )
             subsystems.append(subsystem)
             logger.debug(f"子系统: {subsystem.name}, 制造厂家: {subsystem.manufacturer}")

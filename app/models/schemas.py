@@ -27,6 +27,21 @@ class SubsystemInfo(BaseModel):
     manufacturer: str
     rated_capacity: str
     rated_power: str
+    equipment_structure: str = ""
+    incoming_line_name: str = ""
+    transformer_count: str = ""
+    pcs_count: str = ""
+    battery_bank_count: str = ""
+    battery_cluster_count: str = ""
+    energy_meter_count: str = ""
+    auxiliary_meter_count: str = ""
+    air_conditioner_structure: str = ""
+    air_cooler_count: str = ""
+    liquid_cooler_count: str = ""
+    fire_suppression_structure: str = ""
+    fire_host_count: str = ""
+    fire_detector_count: str = ""
+    fire_suppressor_count: str = ""
 
 
 class ComponentInfo(BaseModel):
