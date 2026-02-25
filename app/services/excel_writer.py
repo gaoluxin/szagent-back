@@ -205,37 +205,36 @@ class ExcelWriter:
             if transformer_count <= 0:
                 continue
 
-            for i in range(transformer_count):
-                box_transformer_name = f"{station_short_name}{subsystem.serial_number}#{i+1}箱变"
+            box_transformer_name = f"{station_short_name}{subsystem.serial_number}#箱变"
 
-                box_transformer_type = ""
-                cooling_system_type = ""
+            box_transformer_type = ""
+            cooling_system_type = ""
 
-                if subsystem.manufacturer in customer_data.component_data:
-                    components = customer_data.component_data[subsystem.manufacturer]
-                    if "箱变信息" in components:
-                        box_transformer_type = components["箱变信息"].box_transformer_type
-                        cooling_system_type = components["箱变信息"].cooling_system_type
+            if subsystem.manufacturer in customer_data.component_data:
+                components = customer_data.component_data[subsystem.manufacturer]
+                if "箱变信息" in components:
+                    box_transformer_type = components["箱变信息"].box_transformer_type
+                    cooling_system_type = components["箱变信息"].cooling_system_type
 
-                mapping = {
-                    "名称*": box_transformer_name,
-                    "制造厂家*": subsystem.manufacturer,
-                    "型号*": subsystem.model,
-                    "箱变类型*": box_transformer_type,
-                    "所属系统*": subsystem.name,
-                    "EnOS箱变类型*": "双绕组",
-                    "冷却系统类型*": cooling_system_type,
-                    "序号*": str(subsystem.serial_number),
-                    "Scada别名": "",
-                    "模型ID": ""
-                }
+            mapping = {
+                "名称*": box_transformer_name,
+                "制造厂家*": subsystem.manufacturer,
+                "型号*": subsystem.model,
+                "箱变类型*": box_transformer_type,
+                "所属系统*": subsystem.name,
+                "EnOS箱变类型*": "双绕组",
+                "冷却系统类型*": cooling_system_type,
+                "序号*": str(subsystem.serial_number),
+                "Scada别名": "",
+                "模型ID": ""
+            }
 
-                for col_idx, header in enumerate(headers, start=1):
-                    if header in mapping:
-                        sheet.cell(row=data_start_row, column=col_idx, value=mapping[header])
-                        logger.debug(f"写入{header}: {mapping[header]}")
+            for col_idx, header in enumerate(headers, start=1):
+                if header in mapping:
+                    sheet.cell(row=data_start_row, column=col_idx, value=mapping[header])
+                    logger.debug(f"写入{header}: {mapping[header]}")
 
-                data_start_row += 1
+            data_start_row += 1
 
     def close(self):
         self.wb.close()
