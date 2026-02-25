@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 class StationInfo(BaseModel):
     name: str
+    short_name: str = ""
     timezone: str
     language: str
     address: str

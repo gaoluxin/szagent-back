@@ -194,7 +194,7 @@ class ExcelWriter:
                 headers.append(str(cell.value).strip())
 
         data_start_row = 4
-        station_name = customer_data.station_info.name
+        station_short_name = customer_data.station_info.short_name
 
         for subsystem in customer_data.subsystems:
             try:
@@ -206,7 +206,7 @@ class ExcelWriter:
                 continue
 
             for i in range(transformer_count):
-                box_transformer_name = self._get_box_transformer_name(station_name, subsystem.serial_number, i + 1)
+                box_transformer_name = f"{station_short_name}{subsystem.serial_number}#{i+1}箱变"
 
                 box_transformer_type = ""
                 cooling_system_type = ""
@@ -236,20 +236,6 @@ class ExcelWriter:
                         logger.debug(f"写入{header}: {mapping[header]}")
 
                 data_start_row += 1
-
-    def _get_box_transformer_name(self, station_name: str, subsystem_serial: int, box_index: int) -> str:
-        station_short_name = self._get_station_short_name(station_name)
-        return f"{station_short_name}{subsystem_serial}#{box_index}箱变"
-
-    def _get_station_short_name(self, station_name: str) -> str:
-        if not station_name:
-            return ""
-        if "光储" in station_name:
-            return "光储"
-        elif "储能" in station_name:
-            return "储能"
-        else:
-            return station_name[:2]
 
     def close(self):
         self.wb.close()

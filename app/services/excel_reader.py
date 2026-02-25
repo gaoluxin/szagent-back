@@ -64,6 +64,7 @@ class ExcelReader:
 
         return StationInfo(
             name=data.get("名称", ""),
+            short_name=data.get("简称", ""),
             timezone=data.get("时区", ""),
             language=data.get("语言", ""),
             address=data.get("场站地址", ""),
