@@ -48,6 +48,8 @@ class SubsystemInfo(BaseModel):
 class ComponentInfo(BaseModel):
     component_type: str
     data: Dict[str, str]
+    box_transformer_type: str = ""
+    cooling_system_type: str = ""
 
 
 class CustomerData(BaseModel):

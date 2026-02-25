@@ -197,7 +197,22 @@ class ExcelReader:
                 value = str(row[start_col].value).strip() if row[start_col].value else ""
                 data[key] = value
 
-            components[comp_type] = ComponentInfo(component_type=comp_type, data=data)
+            box_transformer_type = ""
+            cooling_system_type = ""
+
+            if comp_type == "箱变信息":
+                for row in sheet.iter_rows(min_row=1, max_col=10):
+                    if row[0].value and "箱变类型" in str(row[0].value):
+                        box_transformer_type = str(row[1].value).strip() if row[1].value else ""
+                    if row[0].value and "冷却系统类型" in str(row[0].value):
+                        cooling_system_type = str(row[1].value).strip() if row[1].value else ""
+
+            components[comp_type] = ComponentInfo(
+                component_type=comp_type,
+                data=data,
+                box_transformer_type=box_transformer_type,
+                cooling_system_type=cooling_system_type
+            )
             logger.debug(f"提取{comp_type}: {len(data)}个字段")
 
         return components
