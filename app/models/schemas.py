@@ -20,6 +20,10 @@ class MeterInfo(BaseModel):
     meter_type: str
     rated_capacity: str
     rated_power: str
+    manufacturer: str = ""
+    model: str = ""
+    multiplier: str = ""
+    count: str = ""
 
 
 class SubsystemInfo(BaseModel):
@@ -33,6 +37,7 @@ class SubsystemInfo(BaseModel):
     incoming_line_name: str = ""
     transformer_count: str = ""
     pcs_count: str = ""
+    cabin_count: str = ""
     battery_bank_count: str = ""
     battery_cluster_count: str = ""
     energy_meter_count: str = ""
@@ -51,6 +56,11 @@ class ComponentInfo(BaseModel):
     data: Dict[str, str]
     box_transformer_type: str = ""
     cooling_system_type: str = ""
+    pcs_model: str = ""
+    pcs_rated_power: str = ""
+    pcs_manufacturer: str = ""
+    cabin_model: str = ""
+    cabin_manufacturer: str = ""
 
 
 class CustomerData(BaseModel):

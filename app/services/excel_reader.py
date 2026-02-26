@@ -99,7 +99,11 @@ class ExcelReader:
             name=data.get("名称", ""),
             meter_type=data.get("类型", ""),
             rated_capacity=data.get("额定容量", ""),
-            rated_power=data.get("额定功率", "")
+            rated_power=data.get("额定功率", ""),
+            manufacturer=data.get("制造厂家", ""),
+            model=data.get("设备型号", ""),
+            multiplier=data.get("倍率", ""),
+            count=data.get("关口表数量", ""),
         )
 
     def _extract_subsystems(self) -> List[SubsystemInfo]:
@@ -143,6 +147,7 @@ class ExcelReader:
                 incoming_line_name=row_data.get("所属升压站进线名称", ""),
                 transformer_count=row_data.get("箱变数量", ""),
                 pcs_count=row_data.get("变流器数量", ""),
+                cabin_count=row_data.get("舱数量", ""),
                 battery_bank_count=row_data.get("电池组数量", ""),
                 battery_cluster_count=row_data.get("电池簇数量", ""),
                 energy_meter_count=row_data.get("储能表数量", ""),
@@ -178,7 +183,7 @@ class ExcelReader:
 
     def _extract_components_from_sheet(self, sheet) -> Dict[str, ComponentInfo]:
         component_types = [
-            "箱变信息", "变流器信息", "电池组信息", "电池簇信息",
+            "箱变信息", "舱信息", "变流器信息", "电池组信息", "电池簇信息",
             "储能表信息", "风冷空调信息", "液冷空调信息", "消防设备信息"
         ]
 
@@ -200,6 +205,11 @@ class ExcelReader:
 
             box_transformer_type = ""
             cooling_system_type = ""
+            pcs_model = ""
+            pcs_rated_power = ""
+            pcs_manufacturer = ""
+            cabin_model = ""
+            cabin_manufacturer = ""
 
             if comp_type == "箱变信息":
                 for row in sheet.iter_rows(min_row=1, max_col=10):
@@ -208,11 +218,31 @@ class ExcelReader:
                     if row[0].value and "冷却系统类型" in str(row[0].value):
                         cooling_system_type = str(row[1].value).strip() if row[1].value else ""
 
+            if comp_type == "变流器信息":
+                for row in sheet.iter_rows(min_row=2, max_row=7):
+                    if len(row) > 6 and row[6].value and "制造厂家" in str(row[6].value):
+                        pcs_manufacturer = str(row[7].value).strip() if len(row) > 7 and row[7].value else ""
+                    if len(row) > 6 and row[6].value and "设备型号" in str(row[6].value):
+                        pcs_model = str(row[7].value).strip() if len(row) > 7 and row[7].value else ""
+                    if len(row) > 6 and row[6].value and "额定功率" in str(row[6].value):
+                        pcs_rated_power = str(row[7].value).strip() if len(row) > 7 and row[7].value else ""
+
+            if comp_type == "舱信息":
+                if sheet.max_row >= 4 and sheet[4][3].value and "制造厂家*" in str(sheet[4][3].value):
+                    cabin_manufacturer = str(sheet[4][4].value).strip() if sheet[4][4].value else ""
+                if sheet.max_row >= 5 and sheet[5][3].value and "设备型号*" in str(sheet[5][3].value):
+                    cabin_model = str(sheet[5][4].value).strip() if sheet[5][4].value else ""
+
             components[comp_type] = ComponentInfo(
                 component_type=comp_type,
                 data=data,
                 box_transformer_type=box_transformer_type,
-                cooling_system_type=cooling_system_type
+                cooling_system_type=cooling_system_type,
+                pcs_model=pcs_model,
+                pcs_rated_power=pcs_rated_power,
+                pcs_manufacturer=pcs_manufacturer,
+                cabin_model=cabin_model,
+                cabin_manufacturer=cabin_manufacturer
             )
             logger.debug(f"提取{comp_type}: {len(data)}个字段")
 
