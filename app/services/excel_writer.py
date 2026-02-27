@@ -231,17 +231,32 @@ class ExcelWriter:
 
             box_transformer_type = ""
             cooling_system_type = ""
+            box_transformer_manufacturer = subsystem.manufacturer
+            box_transformer_model = subsystem.model
 
             if subsystem.manufacturer in customer_data.component_data:
                 components = customer_data.component_data[subsystem.manufacturer]
                 if "箱变信息" in components:
-                    box_transformer_type = components["箱变信息"].box_transformer_type
-                    cooling_system_type = components["箱变信息"].cooling_system_type
+                    transformer_info = components["箱变信息"]
+                    box_transformer_type = transformer_info.box_transformer_type
+                    cooling_system_type = transformer_info.cooling_system_type
+                    data = transformer_info.data or {}
+                    # 制造厂家/型号优先从客户收资表“箱变信息”里读取（兼容带 * 与不带 *）
+                    box_transformer_manufacturer = (
+                        data.get("制造厂家*", "").strip()
+                        or data.get("制造厂家", "").strip()
+                        or box_transformer_manufacturer
+                    )
+                    box_transformer_model = (
+                        data.get("设备型号*", "").strip()
+                        or data.get("设备型号", "").strip()
+                        or box_transformer_model
+                    )
 
             mapping = {
                 "名称*": box_transformer_name,
-                "制造厂家*": subsystem.manufacturer,
-                "型号*": subsystem.model,
+                "制造厂家*": box_transformer_manufacturer,
+                "型号*": box_transformer_model,
                 "箱变类型*": box_transformer_type,
                 "所属系统*": subsystem.name,
                 "EnOS箱变类型*": "双绕组",
