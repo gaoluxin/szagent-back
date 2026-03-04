@@ -28,6 +28,17 @@ class ExcelWriter:
         }
         self._load_sheets()
 
+    def _get_component_key(self, subsystem) -> str:
+        """
+        根据子系统信息生成用于索引 component_data 的 key：制造厂家+型号。
+        需与 ExcelReader._extract_component_data 中的规则保持一致。
+        """
+        manufacturer = (subsystem.manufacturer or "").strip()
+        model = (subsystem.model or "").strip()
+        if not manufacturer or not model:
+            return ""
+        return f"{manufacturer}{model}"
+
     def _load_sheets(self):
         for sheet_name in self.sheets.keys():
             if sheet_name in self.wb.sheetnames:
@@ -66,7 +77,7 @@ class ExcelWriter:
         mapping = {
             "名称*": station.name,
             "时区*": station.timezone,
-            "语言*": station.language,
+            "语言*": (station.language or "").strip() or "chn",
             "场站详细地址*": station.address,
             "场站额定容量*": station.rated_capacity_mwh,
             "场站额定功率*": station.rated_power_mw,
@@ -173,8 +184,16 @@ class ExcelWriter:
         if subsystem.pcs_count and subsystem.pcs_count.strip() and subsystem.pcs_count.strip() != "0":
             composition_parts.append("AC")
 
-        has_air_cooler = subsystem.air_cooler_count and subsystem.air_cooler_count.strip() and subsystem.air_cooler_count.strip() != "0"
-        has_liquid_cooler = subsystem.liquid_cooler_count and subsystem.liquid_cooler_count.strip() and subsystem.liquid_cooler_count.strip() != "0"
+        has_air_cooler = (
+            subsystem.air_cooler_count
+            and subsystem.air_cooler_count.strip()
+            and subsystem.air_cooler_count.strip() != "0"
+        )
+        # 新模板中不再提供“液冷空调数量”，改为“液冷空调结构”（空调模式1/2）
+        ac_structure = (subsystem.air_conditioner_structure or "").strip()
+        has_liquid_cooler = any(
+            kw in ac_structure for kw in ["空调模式1", "空调模式2"]
+        )
         if has_air_cooler or has_liquid_cooler:
             composition_parts.append("ThermalSystem")
 
@@ -203,6 +222,120 @@ class ExcelWriter:
         except ValueError:
             return None
 
+    def _get_pcs_name(
+        self,
+        station_short_name: str,
+        subsystem,
+        pcs_index: int,
+        name_example: str | None,
+    ) -> str:
+        """
+        根据默认规则和客户收资表“变流器信息/名称示例*”生成变流器名称。
+
+        默认格式：
+            场站简称 + 系统序号 + "#系统-XX变流器"
+            例：瑞阳1#系统-01变流器
+
+        若“名称示例*”满足以下条件则覆盖默认规则（优先级按顺序）：
+        1. 同时包含场站简称和“号系统” → 场站简称 + 系统序号 + "号系统-XX变流器"
+        2. 只包含“#系统”              → 系统序号 + "#系统-XX变流器"
+        3. 只包含“号系统”             → 系统序号 + "号系统-XX变流器"
+        """
+        sn = subsystem.serial_number
+        seq = f"{pcs_index:02d}"
+        p = (name_example or "").strip()
+
+        # 1) 场站简称 + 系统序号 + "号系统-XX变流器"
+        if station_short_name and ("号系统" in p) and (station_short_name in p):
+            return f"{station_short_name}{sn}号系统-{seq}变流器"
+
+        # 2) 系统序号 + "#系统-XX变流器"
+        if "#系统" in p:
+            return f"{sn}#系统-{seq}变流器"
+
+        # 3) 系统序号 + "号系统-XX变流器"
+        if "号系统" in p:
+            return f"{sn}号系统-{seq}变流器"
+
+        # 默认：场站简称 + 系统序号 + "#系统-XX变流器"
+        return f"{station_short_name}{sn}#系统-{seq}变流器"
+
+    def _get_cabin_name(
+        self,
+        station_short_name: str,
+        subsystem,
+        cabin_index: int,
+        name_example: str | None,
+    ) -> str:
+        """
+        根据默认规则和客户收资表“舱信息/名称示例*”生成舱名称。
+
+        默认格式：
+            场站简称 + 子系统序号 + "#系统-XX舱"
+            例：瑞阳1#系统-01舱
+
+        若“名称示例*”满足以下条件则覆盖默认规则（优先级按顺序）：
+        1. 同时包含场站简称和“号系统” → 场站简称 + 子系统序号 + "号系统-XX舱"
+        2. 只包含“#系统”              → 子系统序号 + "#系统-XX舱"
+        3. 只包含“号系统”             → 子系统序号 + "号系统-XX舱"
+        """
+        sn = subsystem.serial_number
+        seq = f"{cabin_index:02d}"
+        p = (name_example or "").strip()
+
+        # 1) 场站简称 + 子系统序号 + "号系统-XX舱"
+        if station_short_name and ("号系统" in p) and (station_short_name in p):
+            return f"{station_short_name}{sn}号系统-{seq}舱"
+
+        # 2) 子系统序号 + "#系统-XX舱"
+        if "#系统" in p:
+            return f"{sn}#系统-{seq}舱"
+
+        # 3) 子系统序号 + "号系统-XX舱"
+        if "号系统" in p:
+            return f"{sn}号系统-{seq}舱"
+
+        # 默认：场站简称 + 子系统序号 + "#系统-XX舱"
+        return f"{station_short_name}{sn}#系统-{seq}舱"
+
+    def _get_battery_bank_name(
+        self,
+        station_short_name: str,
+        subsystem,
+        bank_index: int,
+        name_example: str | None,
+    ) -> str:
+        """
+        根据默认规则和客户收资表“电池组信息/名称示例*”生成电池组名称。
+
+        默认格式：
+            场站简称 + 系统序号 + "#系统-XX电池组"
+            例：瑞阳1#系统-01电池组
+
+        若“名称示例*”满足以下条件则覆盖默认规则（优先级按顺序）：
+        1. 同时包含场站简称和“号系统” → 场站简称 + 系统序号 + "号系统-XX电池组"
+        2. 只包含“#系统”              → 系统序号 + "#系统-XX电池组"
+        3. 只包含“号系统”             → 系统序号 + "号系统-XX电池组"
+        """
+        sn = subsystem.serial_number
+        seq = f"{bank_index:02d}"
+        p = (name_example or "").strip()
+
+        # 1) 场站简称 + 系统序号 + "号系统-XX电池组"
+        if station_short_name and ("号系统" in p) and (station_short_name in p):
+            return f"{station_short_name}{sn}号系统-{seq}电池组"
+
+        # 2) 系统序号 + "#系统-XX电池组"
+        if "#系统" in p:
+            return f"{sn}#系统-{seq}电池组"
+
+        # 3) 系统序号 + "号系统-XX电池组"
+        if "号系统" in p:
+            return f"{sn}号系统-{seq}电池组"
+
+        # 默认：场站简称 + 系统序号 + "#系统-XX电池组"
+        return f"{station_short_name}{sn}#系统-{seq}电池组"
+
     def _write_box_transformer_sheet(self, customer_data: CustomerData):
         sheet = self.sheets.get("3-箱变")
         if not sheet:
@@ -227,6 +360,39 @@ class ExcelWriter:
             if transformer_count <= 0:
                 continue
 
+            # 默认名称格式：场站简称 + 子系统序号 + "#箱变"
+            def _build_box_name(pattern: str) -> str:
+                """
+                根据“名称示例*”字段选中的示例文本生成箱变名称。
+                注意：单元格的值是数据验证列表中的实际示例文本（第一项、第二项等），
+                而不是“选项1/选项2”这些字样，因此完全按文本内容来判断：
+                1. 文本中既包含场站简称又包含“#箱变”   → 场站简称 + 子系统序号 + "#箱变"
+                2. 文本中既包含场站简称又包含“号箱变” → 场站简称 + 子系统序号 + "号箱变"
+                3. 否则若包含“#箱变”                  → 子系统序号 + "#箱变"
+                4. 否则若包含“号箱变”                → 子系统序号 + "号箱变"
+                """
+                sn = subsystem.serial_number
+                p = (pattern or "").strip()
+
+                # 1) 场站简称 + 子系统序号 + "#箱变"
+                if station_short_name and ("#箱变" in p) and (station_short_name in p):
+                    return f"{station_short_name}{sn}#箱变"
+
+                # 2) 场站简称 + 子系统序号 + "号箱变"
+                if station_short_name and ("号箱变" in p) and (station_short_name in p):
+                    return f"{station_short_name}{sn}号箱变"
+
+                # 3) 子系统序号 + "#箱变"
+                if "#箱变" in p:
+                    return f"{sn}#箱变"
+
+                # 4) 子系统序号 + "号箱变"
+                if "号箱变" in p:
+                    return f"{sn}号箱变"
+
+                # 回退默认：场站简称 + 子系统序号 + "#箱变"
+                return f"{station_short_name}{sn}#箱变"
+
             box_transformer_name = f"{station_short_name}{subsystem.serial_number}#箱变"
 
             box_transformer_type = ""
@@ -234,8 +400,9 @@ class ExcelWriter:
             box_transformer_manufacturer = subsystem.manufacturer
             box_transformer_model = subsystem.model
 
-            if subsystem.manufacturer in customer_data.component_data:
-                components = customer_data.component_data[subsystem.manufacturer]
+            component_key = self._get_component_key(subsystem)
+            if component_key in customer_data.component_data:
+                components = customer_data.component_data[component_key]
                 if "箱变信息" in components:
                     transformer_info = components["箱变信息"]
                     box_transformer_type = transformer_info.box_transformer_type
@@ -252,6 +419,10 @@ class ExcelWriter:
                         or data.get("设备型号", "").strip()
                         or box_transformer_model
                     )
+                    # 根据“名称示例*”字段决定箱变名称格式（若存在则覆盖默认规则）
+                    name_example = (data.get("名称示例*", "") or "").strip()
+                    if name_example:
+                        box_transformer_name = _build_box_name(name_example)
 
             mapping = {
                 "名称*": box_transformer_name,
@@ -307,20 +478,29 @@ class ExcelWriter:
             pcs_model = ""
             pcs_rated_power = ""
             pcs_manufacturer = subsystem.manufacturer
+            pcs_name_example = ""
 
-            if subsystem.manufacturer in customer_data.component_data:
-                components = customer_data.component_data[subsystem.manufacturer]
+            component_key = self._get_component_key(subsystem)
+            if component_key in customer_data.component_data:
+                components = customer_data.component_data[component_key]
                 if "变流器信息" in components:
-                    pcs_model = components["变流器信息"].pcs_model
-                    pcs_rated_power = components["变流器信息"].pcs_rated_power
-                    if components["变流器信息"].pcs_manufacturer:
-                        pcs_manufacturer = components["变流器信息"].pcs_manufacturer
+                    pcs_info = components["变流器信息"]
+                    pcs_model = pcs_info.pcs_model
+                    pcs_rated_power = pcs_info.pcs_rated_power
+                    if pcs_info.pcs_manufacturer:
+                        pcs_manufacturer = pcs_info.pcs_manufacturer
+                    # 客户收资表中“名称示例*”字段（若存在）用于决定名称格式
+                    pcs_name_example = (
+                        (pcs_info.data or {}).get("名称示例*", "") or ""
+                    ).strip()
 
             box_transformer_name = f"{station_short_name}{subsystem.serial_number}#箱变"
 
             for i in range(pcs_count):
                 pcs_number = i + 1
-                pcs_name = f"{station_short_name}{subsystem.serial_number}#-PCS{pcs_number:02d}"
+                pcs_name = self._get_pcs_name(
+                    station_short_name, subsystem, pcs_number, pcs_name_example
+                )
 
                 pcs_group_number = ""
                 if "组串式" in subsystem.equipment_structure or "系统模式2" in subsystem.equipment_structure:
@@ -374,8 +554,10 @@ class ExcelWriter:
 
             logger.info(f"处理子系统: {subsystem.name}, 舱数量: {cabin_count}")
 
-            if subsystem.manufacturer in customer_data.component_data:
-                components = customer_data.component_data[subsystem.manufacturer]
+            component_key = self._get_component_key(subsystem)
+            cabin_name_example = ""
+            if component_key in customer_data.component_data:
+                components = customer_data.component_data[component_key]
                 if "舱信息" in components:
                     cabin_info = components["舱信息"]
                     data = cabin_info.data or {}
@@ -391,6 +573,7 @@ class ExcelWriter:
                         or data.get("设备型号*", "").strip()
                         or subsystem.model
                     )
+                    cabin_name_example = (data.get("名称示例*", "") or "").strip()
                     logger.info(
                         f"找到舱信息: cabin_model={cabin_model}, cabin_manufacturer={cabin_manufacturer}"
                     )
@@ -405,7 +588,9 @@ class ExcelWriter:
 
             for i in range(cabin_count):
                 cabin_number = i + 1
-                cabin_name = f"{station_short_name}{subsystem.serial_number}#-舱{cabin_number:02d}"
+                cabin_name = self._get_cabin_name(
+                    station_short_name, subsystem, cabin_number, cabin_name_example
+                )
 
                 logger.info(f"写入舱: {cabin_name}")
 
@@ -472,10 +657,13 @@ class ExcelWriter:
             battery_manufacturer = subsystem.manufacturer
             battery_model = subsystem.model
             battery_rated_capacity = ""
+            battery_name_example = ""
 
-            # 从客户收资表 <制造厂家>_部件信息 的“电池组信息”中读取制造厂家* / 型号* / 额定容量*
-            if subsystem.manufacturer in customer_data.component_data:
-                components = customer_data.component_data[subsystem.manufacturer]
+            # 从客户收资表 制造厂家+型号 对应的部件信息sheet 的“电池组信息”中读取制造厂家* / 型号* / 额定容量* / 名称示例*
+            component_key = self._get_component_key(subsystem)
+            pcs_name_example = ""
+            if component_key in customer_data.component_data:
+                components = customer_data.component_data[component_key]
                 if "电池组信息" in components:
                     battery_info = components["电池组信息"]
                     data = battery_info.data or {}
@@ -483,17 +671,28 @@ class ExcelWriter:
                         data.get("制造厂家*", "").strip() or battery_manufacturer
                     )
                     battery_model = data.get("型号*", "").strip() or battery_model
+                    battery_name_example = (data.get("名称示例*", "") or "").strip()
+                    # 兼容旧表头“额定容量*”/“额定容量(kWh)”和新表头“额定容量(kW)*”
                     battery_rated_capacity = (
-                        data.get("额定容量*", "").strip()
+                        data.get("额定容量(kW)*", "").strip()
+                        or data.get("额定容量*", "").strip()
+                        or data.get("额定容量(kWh)*", "").strip()
                         or data.get("额定容量(kWh)", "").strip()
                     )
+                if "变流器信息" in components:
+                    pcs_info = components["变流器信息"]
+                    pcs_name_example = (
+                        (pcs_info.data or {}).get("名称示例*", "") or ""
+                    ).strip()
 
             # 生成当前子系统下所有 PCS 名称，后续“所属变流器*”引用
             pcs_names: List[str] = []
             if pcs_count > 0:
                 for i in range(pcs_count):
                     pcs_number = i + 1
-                    pcs_name = f"{station_short_name}{subsystem.serial_number}#-PCS{pcs_number:02d}"
+                    pcs_name = self._get_pcs_name(
+                        station_short_name, subsystem, pcs_number, pcs_name_example
+                    )
                     pcs_names.append(pcs_name)
 
             def get_owner_pcs_name(bank_index: int) -> str:
@@ -522,7 +721,9 @@ class ExcelWriter:
 
             for i in range(battery_bank_count):
                 bank_number = i + 1
-                bank_name = f"{station_short_name}{subsystem.serial_number}#-BBMS{bank_number:02d}"
+                bank_name = self._get_battery_bank_name(
+                    station_short_name, subsystem, bank_number, battery_name_example
+                )
                 owner_pcs_name = get_owner_pcs_name(i)
 
                 logger.info(
@@ -601,9 +802,11 @@ class ExcelWriter:
             pack_count = ""
             cell_spec = ""
 
-            # 从客户收资表 <制造厂家>_部件信息 的“电池簇信息”中读取字段
-            if subsystem.manufacturer in customer_data.component_data:
-                components = customer_data.component_data[subsystem.manufacturer]
+            # 从客户收资表 制造厂家+型号 对应的部件信息sheet 的“电池簇信息”中读取字段
+            component_key = self._get_component_key(subsystem)
+            cluster_name_example = ""
+            if component_key in customer_data.component_data:
+                components = customer_data.component_data[component_key]
                 if "电池簇信息" in components:
                     cluster_info = components["电池簇信息"]
                     data = cluster_info.data or {}
@@ -615,13 +818,18 @@ class ExcelWriter:
                         or data.get("型号*", "").strip()
                         or cluster_model
                     )
+                    # 兼容旧表头“额定容量*”/“额定容量(kWh)”和新表头“额定容量(kwh)*”
                     cluster_rated_capacity = (
-                        data.get("额定容量*", "").strip()
+                        data.get("额定容量(kwh)*", "").strip()
+                        or data.get("额定容量(kWh)*", "").strip()
+                        or data.get("额定容量*", "").strip()
+                        or data.get("额定容量(kwh)", "").strip()
                         or data.get("额定容量(kWh)", "").strip()
                     )
                     cell_count = data.get("包含电芯数量", "").strip()
                     pack_count = data.get("包含电池包数量", "").strip()
                     cell_spec = data.get("电芯规格(Ah)", "").strip()
+                    cluster_name_example = (data.get("名称示例*", "") or "").strip()
 
             # 计算充放电额定功率
             sys_power = self._parse_float(subsystem.rated_power)
@@ -655,24 +863,54 @@ class ExcelWriter:
 
             # 准备所属设备名称列表
             pcs_names: List[str] = []
+            component_key = self._get_component_key(subsystem)
+            pcs_name_example = ""
+            cabin_name_example = ""
+            if component_key in customer_data.component_data:
+                components = customer_data.component_data[component_key]
+                if "变流器信息" in components:
+                    pcs_info = components["变流器信息"]
+                    pcs_name_example = (
+                        (pcs_info.data or {}).get("名称示例*", "") or ""
+                    ).strip()
+                if "舱信息" in components:
+                    cabin_info = components["舱信息"]
+                    cabin_name_example = (
+                        (cabin_info.data or {}).get("名称示例*", "") or ""
+                    ).strip()
             if pcs_count > 0:
                 for i in range(pcs_count):
                     pcs_number = i + 1
-                    pcs_name = f"{station_short_name}{subsystem.serial_number}#-PCS{pcs_number:02d}"
+                    pcs_name = self._get_pcs_name(
+                        station_short_name, subsystem, pcs_number, pcs_name_example
+                    )
                     pcs_names.append(pcs_name)
 
             cabin_names: List[str] = []
             if cabin_count > 0:
                 for i in range(cabin_count):
                     cabin_number = i + 1
-                    cabin_name = f"{station_short_name}{subsystem.serial_number}#-舱{cabin_number:02d}"
+                    cabin_name = self._get_cabin_name(
+                        station_short_name, subsystem, cabin_number, cabin_name_example
+                    )
                     cabin_names.append(cabin_name)
 
             bank_names: List[str] = []
+            battery_name_example = ""
+            component_key = self._get_component_key(subsystem)
+            if component_key in customer_data.component_data:
+                components = customer_data.component_data[component_key]
+                if "电池组信息" in components:
+                    battery_info = components["电池组信息"]
+                    battery_name_example = (
+                        (battery_info.data or {}).get("名称示例*", "") or ""
+                    ).strip()
             if battery_bank_count > 0:
                 for i in range(battery_bank_count):
                     bank_number = i + 1
-                    bank_name = f"{station_short_name}{subsystem.serial_number}#-BBMS{bank_number:02d}"
+                    bank_name = self._get_battery_bank_name(
+                        station_short_name, subsystem, bank_number, battery_name_example
+                    )
                     bank_names.append(bank_name)
 
             def get_owner_bank_index(cluster_index: int) -> int:
@@ -717,7 +955,21 @@ class ExcelWriter:
                 self._battery_cluster_group_seq[group_key] = current_seq
                 seq_code = f"{group_no}{current_seq:02d}"
 
-                cluster_name = f"{station_short_name}{subsystem.serial_number}#-{seq_code}电池簇"
+                # 电池簇名称：默认“场站简称+子系统序号+#系统-XXX电池簇”，可由“电池簇信息/名称示例*”覆盖
+                if station_short_name:
+                    default_cluster_name = f"{station_short_name}{subsystem.serial_number}#系统-{seq_code}电池簇"
+                else:
+                    default_cluster_name = f"{subsystem.serial_number}#系统-{seq_code}电池簇"
+
+                p = cluster_name_example
+                if station_short_name and ("号系统" in p) and (station_short_name in p):
+                    cluster_name = f"{station_short_name}{subsystem.serial_number}号系统-{seq_code}电池簇"
+                elif "#系统" in p:
+                    cluster_name = f"{subsystem.serial_number}#系统-{seq_code}电池簇"
+                elif "号系统" in p:
+                    cluster_name = f"{subsystem.serial_number}号系统-{seq_code}电池簇"
+                else:
+                    cluster_name = default_cluster_name
 
                 owner_bank_name = ""
                 if "系统模式3" not in mode and bank_names:
@@ -795,17 +1047,14 @@ class ExcelWriter:
             return ""
 
         for subsystem in customer_data.subsystems:
-            ac_structure = (subsystem.air_conditioner_structure or "").strip()
-            if not ac_structure:
-                logger.info(f"子系统: {subsystem.name} 无空调设备结构，跳过")
-                continue
-
-            # MM: 空调模式1=风冷，否则=液冷
-            is_fengleng = "空调模式1" in ac_structure
-            mm = "风冷" if is_fengleng else "液冷"
-            thermal_type = "风冷机组" if is_fengleng else "液冷机组"
-            is_cluster_level = "空调模式3" in ac_structure
-            thermal_level = "电池簇级" if is_cluster_level else "电池组级"
+            # 新模板：子系统“空调信息”提供
+            # - 风冷空调数量（空气冷却数量）
+            # - 液冷空调结构（空调模式1/2，决定液冷空调层级）
+            liquid_structure = (subsystem.air_conditioner_structure or "").strip()
+            try:
+                wind_count = int(subsystem.air_cooler_count)
+            except (ValueError, TypeError):
+                wind_count = 0
 
             try:
                 cabin_count = int(subsystem.cabin_count)
@@ -820,45 +1069,80 @@ class ExcelWriter:
             except (ValueError, TypeError):
                 cluster_count = 0
 
-            # 制造厂家*、设备型号* 来自客户收资表 风冷空调信息/液冷空调信息（兼容带*与不带*的键名）
-            ac_manufacturer = subsystem.manufacturer
-            ac_model = subsystem.model
+            if wind_count <= 0 and not liquid_structure:
+                logger.info(f"子系统: {subsystem.name} 无空调配置，跳过")
+                continue
+
+            # 制造厂家*、设备型号*：
+            # - 风冷空调来自“风冷空调信息”
+            # - 液冷空调来自“液冷空调信息”
+            wind_manufacturer = subsystem.manufacturer
+            wind_model = subsystem.model
+            wind_name_example = ""
+            liquid_manufacturer = subsystem.manufacturer
+            liquid_model = subsystem.model
             pack_count_from_cluster = ""
-            if subsystem.manufacturer in customer_data.component_data:
-                components = customer_data.component_data[subsystem.manufacturer]
-                if is_fengleng and "风冷空调信息" in components:
+
+            component_key = self._get_component_key(subsystem)
+            cluster_name_example = ""
+            if component_key in customer_data.component_data:
+                components = customer_data.component_data[component_key]
+                if "风冷空调信息" in components:
                     d = components["风冷空调信息"].data or {}
                     v = _get_ac_field(d, ["制造厂家*", "制造厂家"], "制造厂家")
                     if v:
-                        ac_manufacturer = v
+                        wind_manufacturer = v
                     v = _get_ac_field(d, ["设备型号*", "设备型号"], "设备型号")
                     if v:
-                        ac_model = v
-                elif not is_fengleng and "液冷空调信息" in components:
+                        wind_model = v
+                    wind_name_example = (d.get("名称示例*", "") or "").strip()
+                if "液冷空调信息" in components:
                     d = components["液冷空调信息"].data or {}
                     v = _get_ac_field(d, ["制造厂家*", "制造厂家"], "制造厂家")
                     if v:
-                        ac_manufacturer = v
+                        liquid_manufacturer = v
                     v = _get_ac_field(d, ["设备型号*", "设备型号"], "设备型号")
                     if v:
-                        ac_model = v
+                        liquid_model = v
                 if "电池簇信息" in components:
-                    pack_count_from_cluster = (
-                        (components["电池簇信息"].data or {}).get("包含电池包数量", "").strip()
-                    )
+                    data = components["电池簇信息"].data or {}
+                    pack_count_from_cluster = data.get("包含电池包数量", "").strip()
+                    cluster_name_example = (data.get("名称示例*", "") or "").strip()
 
             cabin_names: List[str] = []
+            component_key = self._get_component_key(subsystem)
+            cabin_name_example = ""
+            if component_key in customer_data.component_data:
+                components = customer_data.component_data[component_key]
+                if "舱信息" in components:
+                    cabin_info = components["舱信息"]
+                    cabin_name_example = (
+                        (cabin_info.data or {}).get("名称示例*", "") or ""
+                    ).strip()
             if cabin_count > 0:
                 for i in range(cabin_count):
                     cabin_names.append(
-                        f"{station_short_name}{subsystem.serial_number}#-舱{i + 1:02d}"
+                        self._get_cabin_name(
+                            station_short_name, subsystem, i + 1, cabin_name_example
+                        )
                     )
 
             bank_names: List[str] = []
+            battery_name_example = ""
+            component_key = self._get_component_key(subsystem)
+            if component_key in customer_data.component_data:
+                components = customer_data.component_data[component_key]
+                if "电池组信息" in components:
+                    battery_info = components["电池组信息"]
+                    battery_name_example = (
+                        (battery_info.data or {}).get("名称示例*", "") or ""
+                    ).strip()
             if battery_bank_count > 0:
                 for i in range(battery_bank_count):
                     bank_names.append(
-                        f"{station_short_name}{subsystem.serial_number}#-BBMS{i + 1:02d}"
+                        self._get_battery_bank_name(
+                            station_short_name, subsystem, i + 1, battery_name_example
+                        )
                     )
 
             def get_owner_cabin_index_by_cluster(cluster_index: int) -> int:
@@ -872,92 +1156,285 @@ class ExcelWriter:
             def get_owner_cabin_index_by_bank(bank_index: int) -> int:
                 if cabin_count <= 0:
                     return 0
-                if battery_bank_count >= cabin_count:
+                if battery_bank_count >= cabin_count and cabin_count > 0:
                     per_cabin = max(1, battery_bank_count // cabin_count)
                     return min(bank_index // per_cabin, cabin_count - 1)
                 return min(bank_index, cabin_count - 1)
 
-            if is_cluster_level:
-                # 电池簇级：空调数量=电池簇数量，NNN与电池簇编号一致（三位：电池组号+组内两位序号）
-                if cluster_count <= 0:
-                    logger.info(f"子系统: {subsystem.name} 电池簇级空调但电池簇数量为0，跳过")
-                    continue
-
-                def get_owner_bank_index(cluster_index: int) -> int:
-                    if battery_bank_count <= 0:
-                        return 0
-                    if cluster_count >= battery_bank_count:
-                        per_bank = max(1, cluster_count // battery_bank_count)
-                        return min(cluster_index // per_bank, battery_bank_count - 1)
-                    return min(cluster_index, battery_bank_count - 1)
-
-                ac_cluster_seq: Dict[tuple, int] = {}
-                for i in range(cluster_count):
-                    bank_index = get_owner_bank_index(i)
-                    group_no = bank_index + 1
-                    key = (subsystem.serial_number, bank_index)
-                    ac_cluster_seq[key] = ac_cluster_seq.get(key, 0) + 1
-                    seq_code = f"{group_no}{ac_cluster_seq[key]:02d}"
-                    nnn = seq_code
-                    ac_name = f"{station_short_name}{subsystem.serial_number}#-{mm}空调{nnn}"
-                    cluster_name = f"{station_short_name}{subsystem.serial_number}#-{seq_code}电池簇"
-                    cabin_index = get_owner_cabin_index_by_cluster(i)
-                    owner_cabin = cabin_names[cabin_index] if cabin_names else ""
-
-                    mapping = {
-                        "名称*": ac_name,
-                        "制造厂家*": ac_manufacturer,
-                        "设备型号*": ac_model,
-                        "热管理机组类型*": thermal_type,
-                        "热管理机组层级*": thermal_level,
-                        "所属舱*": owner_cabin,
-                        "覆盖电池包数量*": pack_count_from_cluster,
-                        "覆盖电池簇数量*": "",
-                        "所属上级节点*": cluster_name,
-                        "序号*": seq_code,
-                        "Scada别名": "",
-                        "模型ID": "",
-                    }
-                    for col_idx, header in enumerate(headers, start=1):
-                        if header in mapping:
-                            sheet.cell(row=data_start_row, column=col_idx, value=mapping[header])
-                    data_start_row += 1
-            else:
-                # 电池组级：空调数量=电池组数量，NNN为两位（01,02...）
+            def get_group_no(bank_index: int) -> int:
+                # NNN 的首位为电池组编号；分散式无电池组时固定为 1
                 if battery_bank_count <= 0:
-                    logger.info(f"子系统: {subsystem.name} 电池组级空调但电池组数量为0，跳过")
-                    continue
+                    return 1
+                return bank_index + 1
 
-                cover_cluster_count = ""
-                if cluster_count > 0 and battery_bank_count > 0:
-                    cover_cluster_count = str(cluster_count // battery_bank_count)
+            cover_cluster_count = ""
+            if cluster_count > 0 and battery_bank_count > 0:
+                cover_cluster_count = str(cluster_count // battery_bank_count)
 
-                for bank_index in range(battery_bank_count):
-                    nnn = f"{bank_index + 1:02d}"
-                    ac_name = f"{station_short_name}{subsystem.serial_number}#-{mm}空调{nnn}"
+            # 1) 风冷空调：风冷空调数量>0 时，根据风冷空调数量与电池组数量的倍数关系插入记录
+            if wind_count > 0:
+                thermal_type = "风冷机组"
+                thermal_level = "电池组级"
+
+                # 有电池组则按电池组分配；分散式无电池组则视为1组
+                effective_bank_count = battery_bank_count if battery_bank_count > 0 else 1
+
+                base_per_bank = wind_count // effective_bank_count
+                remainder = wind_count % effective_bank_count
+                if remainder != 0:
+                    logger.warning(
+                        f"子系统: {subsystem.name} 风冷空调数量({wind_count})与电池组数量({effective_bank_count})"
+                        f"不是整数倍，将尽量平均分配，前{remainder}个电池组多分配1台。"
+                    )
+
+                counts_per_bank: List[int] = []
+                for bi in range(effective_bank_count):
+                    cnt = base_per_bank + (1 if bi < remainder else 0)
+                    counts_per_bank.append(cnt)
+
+                for bank_index, count in enumerate(counts_per_bank):
+                    if count <= 0:
+                        continue
+                    group_no = get_group_no(bank_index)
+                    for seq_idx in range(count):
+                        local_seq = seq_idx + 1
+                        seq_code = f"{group_no}{local_seq:02d}"
+                        # 名称*：场站简称+系统序号+"#系统-NNN风冷空调"（按“名称示例*”系统前缀规则覆盖）
+                        if station_short_name:
+                            default_ac_name = (
+                                f"{station_short_name}{subsystem.serial_number}#系统-{seq_code}风冷空调"
+                            )
+                        else:
+                            default_ac_name = (
+                                f"{subsystem.serial_number}#系统-{seq_code}风冷空调"
+                            )
+                        p = wind_name_example
+                        if station_short_name and ("号系统" in p) and (
+                            station_short_name in p
+                        ):
+                            ac_name = (
+                                f"{station_short_name}{subsystem.serial_number}号系统-{seq_code}风冷空调"
+                            )
+                        elif "#系统" in p:
+                            ac_name = (
+                                f"{subsystem.serial_number}#系统-{seq_code}风冷空调"
+                            )
+                        elif "号系统" in p:
+                            ac_name = (
+                                f"{subsystem.serial_number}号系统-{seq_code}风冷空调"
+                            )
+                        else:
+                            ac_name = default_ac_name
+                        owner_cabin = ""
+                        if cabin_names:
+                            cabin_idx = get_owner_cabin_index_by_bank(
+                                min(bank_index, len(cabin_names) - 1)
+                            )
+                            owner_cabin = cabin_names[cabin_idx]
+                        owner_node = (
+                            bank_names[bank_index]
+                            if bank_names and bank_index < len(bank_names)
+                            else ""
+                        )
+
+                        mapping = {
+                            "名称*": ac_name,
+                            "制造厂家*": wind_manufacturer,
+                            "设备型号*": wind_model,
+                            "热管理机组类型*": thermal_type,
+                            "热管理机组层级*": thermal_level,
+                            "所属舱*": owner_cabin,
+                            "覆盖电池包数量*": "",
+                            "覆盖电池簇数量*": cover_cluster_count,
+                            "所属上级节点*": owner_node,
+                            "序号*": seq_code,
+                            "Scada别名": "",
+                            "模型ID": "",
+                        }
+                        for col_idx, header in enumerate(headers, start=1):
+                            if header in mapping:
+                                sheet.cell(
+                                    row=data_start_row, column=col_idx, value=mapping[header]
+                                )
+                        data_start_row += 1
+
+            # 2) 液冷空调：液冷空调结构=空调模式1/2 时，根据模式填充
+            has_liquid_mode1 = "空调模式1" in liquid_structure
+            has_liquid_mode2 = "空调模式2" in liquid_structure
+
+            if not has_liquid_mode1 and not has_liquid_mode2:
+                if wind_count <= 0:
+                    logger.info(f"子系统: {subsystem.name} 未配置液冷空调结构，跳过液冷空调")
+                continue
+
+            # 模式2：电池簇级液冷，数量=电池簇数量
+            if has_liquid_mode2:
+                if cluster_count <= 0:
+                    logger.info(f"子系统: {subsystem.name} 液冷空调为电池簇级但电池簇数量为0，跳过")
+                else:
+                    thermal_type = "液冷机组"
+                    thermal_level = "电池簇级"
+
+                    def get_owner_bank_index(cluster_index: int) -> int:
+                        if battery_bank_count <= 0:
+                            return 0
+                        if cluster_count >= battery_bank_count:
+                            per_bank = max(1, cluster_count // battery_bank_count)
+                            return min(cluster_index // per_bank, battery_bank_count - 1)
+                        return min(cluster_index, battery_bank_count - 1)
+
+                    ac_cluster_seq: Dict[tuple, int] = {}
+                    for i in range(cluster_count):
+                        bank_index = get_owner_bank_index(i)
+                        group_no = get_group_no(bank_index)
+                        key = (subsystem.serial_number, bank_index)
+                        ac_cluster_seq[key] = ac_cluster_seq.get(key, 0) + 1
+                        seq_code = f"{group_no}{ac_cluster_seq[key]:02d}"
+
+                        # 与 7-电池簇 一致的电池簇命名规则（受“电池簇信息/名称示例*”影响）
+                        if station_short_name:
+                            default_cluster_name = (
+                                f"{station_short_name}{subsystem.serial_number}#系统-{seq_code}电池簇"
+                            )
+                        else:
+                            default_cluster_name = (
+                                f"{subsystem.serial_number}#系统-{seq_code}电池簇"
+                            )
+                        p = cluster_name_example
+                        if station_short_name and ("号系统" in p) and (
+                            station_short_name in p
+                        ):
+                            cluster_name = (
+                                f"{station_short_name}{subsystem.serial_number}号系统-{seq_code}电池簇"
+                            )
+                        elif "#系统" in p:
+                            cluster_name = (
+                                f"{subsystem.serial_number}#系统-{seq_code}电池簇"
+                            )
+                        elif "号系统" in p:
+                            cluster_name = (
+                                f"{subsystem.serial_number}号系统-{seq_code}电池簇"
+                            )
+                        else:
+                            cluster_name = default_cluster_name
+
+                        # 液冷空调名称：场站简称+系统序号+"#系统-NNN液冷空调"，同样受系统前缀规则影响
+                        if station_short_name:
+                            default_ac_name = (
+                                f"{station_short_name}{subsystem.serial_number}#系统-{seq_code}液冷空调"
+                            )
+                        else:
+                            default_ac_name = (
+                                f"{subsystem.serial_number}#系统-{seq_code}液冷空调"
+                            )
+                        if station_short_name and ("号系统" in p) and (
+                            station_short_name in p
+                        ):
+                            ac_name = (
+                                f"{station_short_name}{subsystem.serial_number}号系统-{seq_code}液冷空调"
+                            )
+                        elif "#系统" in p:
+                            ac_name = (
+                                f"{subsystem.serial_number}#系统-{seq_code}液冷空调"
+                            )
+                        elif "号系统" in p:
+                            ac_name = (
+                                f"{subsystem.serial_number}号系统-{seq_code}液冷空调"
+                            )
+                        else:
+                            ac_name = default_ac_name
+                        cabin_index = get_owner_cabin_index_by_cluster(i)
+                        owner_cabin = cabin_names[cabin_index] if cabin_names else ""
+
+                        mapping = {
+                            "名称*": ac_name,
+                            "制造厂家*": liquid_manufacturer,
+                            "设备型号*": liquid_model,
+                            "热管理机组类型*": thermal_type,
+                            "热管理机组层级*": thermal_level,
+                            "所属舱*": owner_cabin,
+                            "覆盖电池包数量*": pack_count_from_cluster,
+                            "覆盖电池簇数量*": "",
+                            "所属上级节点*": cluster_name,
+                            "序号*": seq_code,
+                            "Scada别名": "",
+                            "模型ID": "",
+                        }
+                        for col_idx, header in enumerate(headers, start=1):
+                            if header in mapping:
+                                sheet.cell(
+                                    row=data_start_row, column=col_idx, value=mapping[header]
+                                )
+                        data_start_row += 1
+
+            # 模式1：电池组级液冷，数量=电池组数量
+            if has_liquid_mode1:
+                if battery_bank_count <= 0:
+                    logger.info(f"子系统: {subsystem.name} 液冷空调为电池组级但电池组数量为0，按1组处理")
+                    effective_bank_count = 1
+                else:
+                    effective_bank_count = battery_bank_count
+
+                thermal_type = "液冷机组"
+                thermal_level = "电池组级"
+
+                for bank_index in range(effective_bank_count):
+                    group_no = get_group_no(bank_index)
+                    # 每个电池组一台液冷空调，组内编号从01开始
+                    seq_code = f"{group_no}01"
+                    # 电池组级液冷空调名称同样采用系统前缀规则
+                    if station_short_name:
+                        default_ac_name = (
+                            f"{station_short_name}{subsystem.serial_number}#系统-{seq_code}液冷空调"
+                        )
+                    else:
+                        default_ac_name = (
+                            f"{subsystem.serial_number}#系统-{seq_code}液冷空调"
+                        )
+                    p = cluster_name_example
+                    if station_short_name and ("号系统" in p) and (
+                        station_short_name in p
+                    ):
+                        ac_name = (
+                            f"{station_short_name}{subsystem.serial_number}号系统-{seq_code}液冷空调"
+                        )
+                    elif "#系统" in p:
+                        ac_name = f"{subsystem.serial_number}#系统-{seq_code}液冷空调"
+                    elif "号系统" in p:
+                        ac_name = f"{subsystem.serial_number}号系统-{seq_code}液冷空调"
+                    else:
+                        ac_name = default_ac_name
                     owner_cabin = ""
                     if cabin_names:
-                        cabin_index = get_owner_cabin_index_by_bank(bank_index)
+                        cabin_index = get_owner_cabin_index_by_bank(
+                            min(bank_index, len(cabin_names) - 1)
+                        )
                         owner_cabin = cabin_names[cabin_index]
-                    owner_node = bank_names[bank_index] if bank_names else ""
+                    owner_node = (
+                        bank_names[bank_index]
+                        if bank_names and bank_index < len(bank_names)
+                        else ""
+                    )
 
                     mapping = {
                         "名称*": ac_name,
-                        "制造厂家*": ac_manufacturer,
-                        "设备型号*": ac_model,
+                        "制造厂家*": liquid_manufacturer,
+                        "设备型号*": liquid_model,
                         "热管理机组类型*": thermal_type,
                         "热管理机组层级*": thermal_level,
                         "所属舱*": owner_cabin,
                         "覆盖电池包数量*": "",
                         "覆盖电池簇数量*": cover_cluster_count,
                         "所属上级节点*": owner_node,
-                        "序号*": nnn,
+                        "序号*": seq_code,
                         "Scada别名": "",
                         "模型ID": "",
                     }
                     for col_idx, header in enumerate(headers, start=1):
                         if header in mapping:
-                            sheet.cell(row=data_start_row, column=col_idx, value=mapping[header])
+                            sheet.cell(
+                                row=data_start_row, column=col_idx, value=mapping[header]
+                            )
                     data_start_row += 1
 
     def _write_fire_suppression_sheet(self, customer_data: CustomerData):
@@ -1024,15 +1501,18 @@ class ExcelWriter:
             # 从客户收资表 消防设备信息 读取
             fire_manufacturer = subsystem.manufacturer
             fire_model = subsystem.model
+            fire_name_example = ""
             has_pack_detector = ""
             has_cluster_detector = ""
             pack_detector_count_val = ""
-            if subsystem.manufacturer in customer_data.component_data:
-                comps = customer_data.component_data[subsystem.manufacturer]
+            component_key = self._get_component_key(subsystem)
+            if component_key in customer_data.component_data:
+                comps = customer_data.component_data[component_key]
                 if "消防设备信息" in comps:
                     d = (comps["消防设备信息"].data or {})
                     fire_manufacturer = (d.get("制造厂家*") or d.get("制造厂家") or "").strip() or fire_manufacturer
                     fire_model = (d.get("设备型号*") or d.get("设备型号") or "").strip() or fire_model
+                    fire_name_example = (d.get("名称示例*", "") or "").strip()
                     has_pack_detector = (d.get("是否包含包级探测器") or "").strip()
                     has_cluster_detector = (d.get("是否包含簇级探测器") or "").strip()
                 if "电池簇信息" in comps and (has_pack_detector or "").strip() == "1-yes":
@@ -1041,10 +1521,21 @@ class ExcelWriter:
                     ).strip()
 
             bank_names: List[str] = []
+            battery_name_example = ""
+            component_key = self._get_component_key(subsystem)
+            if component_key in customer_data.component_data:
+                comps = customer_data.component_data[component_key]
+                if "电池组信息" in comps:
+                    battery_info = comps["电池组信息"]
+                    battery_name_example = (
+                        (battery_info.data or {}).get("名称示例*", "") or ""
+                    ).strip()
             if battery_bank_count > 0:
                 for i in range(battery_bank_count):
                     bank_names.append(
-                        f"{station_short_name}{subsystem.serial_number}#-BBMS{i + 1:02d}"
+                        self._get_battery_bank_name(
+                            station_short_name, subsystem, i + 1, battery_name_example
+                        )
                     )
 
             # 电池簇名称与序号（与7-电池簇规则一致，按电池组内从01递增）
@@ -1079,7 +1570,23 @@ class ExcelWriter:
                 nonlocal data_start_row
                 # MM：消防控制→控制，消防探测→探测，消防抑制→抑制
                 mm = {"消防控制": "控制", "消防探测": "探测", "消防抑制": "抑制"}.get(fire_type, "")
-                name = f"{station_short_name}{subsystem.serial_number}#-消防{mm}设备{nnn}"
+
+                # 默认名称：场站简称 + 系统序号 + "#系统-NNNMM消防设备"
+                if station_short_name:
+                    default_name = f"{station_short_name}{subsystem.serial_number}#系统-{nnn}{mm}消防设备"
+                else:
+                    default_name = f"{subsystem.serial_number}#系统-{nnn}{mm}消防设备"
+
+                p = fire_name_example
+                if station_short_name and ("号系统" in p) and (station_short_name in p):
+                    name = f"{station_short_name}{subsystem.serial_number}号系统-{nnn}{mm}消防设备"
+                elif "#系统" in p:
+                    name = f"{subsystem.serial_number}#系统-{nnn}{mm}消防设备"
+                elif "号系统" in p:
+                    name = f"{subsystem.serial_number}号系统-{nnn}{mm}消防设备"
+                else:
+                    name = default_name
+
                 mapping = {
                     "名称*": name,
                     "制造厂家*": fire_manufacturer,
@@ -1207,14 +1714,14 @@ class ExcelWriter:
             if energy_meter_count <= 0:
                 continue
 
-            sub_short_prefix = f"{station_short_name}{subsystem.serial_number}#-"
-
             meter_manufacturer = subsystem.manufacturer
             meter_model = subsystem.model
             meter_multiplier = ""
+            meter_name_example = ""
 
-            if subsystem.manufacturer in customer_data.component_data:
-                comps = customer_data.component_data[subsystem.manufacturer]
+            component_key = self._get_component_key(subsystem)
+            if component_key in customer_data.component_data:
+                comps = customer_data.component_data[component_key]
                 if "储能表信息" in comps:
                     d = comps["储能表信息"].data or {}
                     meter_manufacturer = (
@@ -1224,6 +1731,7 @@ class ExcelWriter:
                         (d.get("设备型号*") or d.get("设备型号") or meter_model)
                     ).strip()
                     meter_multiplier = (d.get("倍率*") or d.get("倍率") or "").strip()
+                    meter_name_example = (d.get("名称示例*", "") or "").strip()
 
             # 斜率*: 子系统额定功率(kw) / 2（若无法解析则留空）
             try:
@@ -1238,7 +1746,28 @@ class ExcelWriter:
 
             for i in range(energy_meter_count):
                 idx = i + 1
-                name = f"{sub_short_prefix}{idx:02d}储能表"
+                seq = f"{idx:02d}"
+                # 默认：场站简称 + 子系统序号 + "#系统-XX储能表"
+                if station_short_name:
+                    default_name = (
+                        f"{station_short_name}{subsystem.serial_number}#系统-{seq}储能表"
+                    )
+                else:
+                    default_name = f"{subsystem.serial_number}#系统-{seq}储能表"
+
+                p = meter_name_example
+                if station_short_name and ("号系统" in p) and (
+                    station_short_name in p
+                ):
+                    name = (
+                        f"{station_short_name}{subsystem.serial_number}号系统-{seq}储能表"
+                    )
+                elif "#系统" in p:
+                    name = f"{subsystem.serial_number}#系统-{seq}储能表"
+                elif "号系统" in p:
+                    name = f"{subsystem.serial_number}号系统-{seq}储能表"
+                else:
+                    name = default_name
                 mapping = {
                     "名称*": name,
                     "制造厂家*": meter_manufacturer,

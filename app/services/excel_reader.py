@@ -152,7 +152,11 @@ class ExcelReader:
                 battery_cluster_count=row_data.get("电池簇数量", ""),
                 energy_meter_count=row_data.get("储能表数量", ""),
                 auxiliary_meter_count=row_data.get("辅电表数量", ""),
-                air_conditioner_structure=row_data.get("空调设备结构", ""),
+                # 空调信息：新模板使用“液冷空调结构”和“风冷空调数量”，旧模板为“空调设备结构 / 风冷空调数量 / 液冷空调数量”
+                air_conditioner_structure=(
+                    row_data.get("液冷空调结构", "")
+                    or row_data.get("空调设备结构", "")
+                ),
                 air_cooler_count=row_data.get("风冷空调数量", ""),
                 liquid_cooler_count=row_data.get("液冷空调数量", ""),
                 fire_suppression_structure=row_data.get("消防设备结构", ""),
@@ -167,19 +171,107 @@ class ExcelReader:
         return subsystems
 
     def _extract_component_data(self, subsystems: List[SubsystemInfo]) -> Dict[str, Dict[str, ComponentInfo]]:
-        manufacturers = set(sub.manufacturer for sub in subsystems if sub.manufacturer)
-        component_data = {}
+        """
+        根据子系统的“制造厂家+型号”从各个部件信息 sheet 中提取数据。
+        新规则：
+        - 先从子系统信息中收集所有非空的 制造厂家+型号 组合，作为目标 key
+        - 遍历除“场站信息”外的所有 sheet：
+          - 在第一行查找 “储能系统型号选择*” 所在列
+          - 读取该列下方（从第2行开始）的第一个非空单元格，得到一个 “制造厂家+型号” 字符串
+          - 若该字符串在目标 key 集合中，则将此 sheet 解析为该 key 的部件信息
+        - 若某个 制造厂家+型号 在所有 sheet 中都未找到对应部件信息，则记录告警日志
+        """
+        # 收集所有需要查找的 制造厂家+型号 组合
+        target_keys: Dict[str, tuple[str, str]] = {}
+        for sub in subsystems:
+            manufacturer = (sub.manufacturer or "").strip()
+            model = (sub.model or "").strip()
+            if not manufacturer or not model:
+                continue
+            key = f"{manufacturer}{model}"
+            # 如果存在重复的 key，以第一次出现为准（只影响告警文案，不影响数据）
+            target_keys.setdefault(key, (manufacturer, model))
 
-        for manufacturer in manufacturers:
-            sheet_name = f"{manufacturer}_部件信息"
-            if sheet_name not in self.wb.sheetnames:
-                logger.warning(f"未找到部件信息sheet页: {sheet_name}")
+        component_data: Dict[str, Dict[str, ComponentInfo]] = {}
+
+        if not target_keys:
+            return component_data
+
+        # 遍历所有 sheet，按“储能系统型号选择*”列的值匹配到 制造厂家+型号
+        for sheet_name in self.wb.sheetnames:
+            sheet = self.wb[sheet_name]
+
+            # 场站信息 sheet 只用于基础数据，不包含部件信息，跳过
+            if sheet is self.station_sheet:
                 continue
 
-            sheet = self.wb[sheet_name]
-            component_data[manufacturer] = self._extract_components_from_sheet(sheet)
+            model_key_in_sheet = self._get_model_key_from_sheet(sheet)
+            if not model_key_in_sheet:
+                continue
+
+            if model_key_in_sheet not in target_keys:
+                continue
+
+            if model_key_in_sheet in component_data:
+                logger.warning(
+                    f"制造厂家+型号 {model_key_in_sheet} 对应多个部件信息sheet页，"
+                    f"已使用首个匹配sheet，忽略sheet: {sheet_name}"
+                )
+                continue
+
+            component_data[model_key_in_sheet] = self._extract_components_from_sheet(sheet)
+            logger.info(f"为制造厂家+型号 {model_key_in_sheet} 提取部件信息自 sheet: {sheet_name}")
+
+        # 对未找到部件信息的 制造厂家+型号 进行告警
+        for key, (manufacturer, model) in target_keys.items():
+            if key not in component_data:
+                logger.warning(
+                    f"未找到制造厂家和型号对应的部件信息: 制造厂家={manufacturer}, 型号={model}"
+                )
 
         return component_data
+
+    def _get_model_key_from_sheet(self, sheet) -> Optional[str]:
+        """
+        从给定 sheet 中，根据“储能系统型号选择*”获取对应的 制造厂家+型号 字符串。
+        规则优先级：
+        1. 在第1行查找包含“储能系统型号选择”的单元格（兼容是否带 *）
+           - 优先取同一行中该单元格右侧的第一个非空单元格作为“制造厂家+型号”
+        2. 若同一行右侧没有非空值，则退回到旧逻辑：
+           - 从该列下一行开始向下查找第一个非空单元格作为“制造厂家+型号”
+        """
+        header_cell = None
+        for cell in sheet[1]:
+            if not cell.value:
+                continue
+            text = str(cell.value).strip()
+            if "储能系统型号选择" in text:
+                header_cell = cell
+                break
+
+        if not header_cell:
+            return None
+
+        # 优先：同一行右侧的第一个非空单元格
+        row_idx = header_cell.row
+        for col_idx in range(header_cell.column + 1, sheet.max_column + 1):
+            value = sheet.cell(row=row_idx, column=col_idx).value
+            if value is None:
+                continue
+            key = str(value).strip()
+            if key:
+                return key
+
+        # 兼容旧结构：向下查找该列第一个非空值
+        for row_idx in range(header_cell.row + 1, sheet.max_row + 1):
+            value = sheet.cell(row=row_idx, column=header_cell.column).value
+            if value is None:
+                continue
+            key = str(value).strip()
+            if key:
+                return key
+
+        return None
 
     def _extract_components_from_sheet(self, sheet) -> Dict[str, ComponentInfo]:
         component_types = [
