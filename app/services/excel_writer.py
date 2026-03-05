@@ -249,6 +249,9 @@ class ExcelWriter:
         if station_short_name and ("号系统" in p) and (station_short_name in p):
             return f"{station_short_name}{sn}号系统-{seq}变流器"
 
+        if station_short_name and ("#系统" in p) and (station_short_name in p):
+            return f"{station_short_name}{sn}#系统-{seq}变流器"
+
         # 2) 系统序号 + "#系统-XX变流器"
         if "#系统" in p:
             return f"{sn}#系统-{seq}变流器"
@@ -286,7 +289,9 @@ class ExcelWriter:
         # 1) 场站简称 + 子系统序号 + "号系统-XX舱"
         if station_short_name and ("号系统" in p) and (station_short_name in p):
             return f"{station_short_name}{sn}号系统-{seq}舱"
-
+        
+        if station_short_name and ("#系统" in p) and (station_short_name in p):
+            return f"{station_short_name}{sn}#系统-{seq}舱"
         # 2) 子系统序号 + "#系统-XX舱"
         if "#系统" in p:
             return f"{sn}#系统-{seq}舱"
@@ -324,6 +329,9 @@ class ExcelWriter:
         # 1) 场站简称 + 系统序号 + "号系统-XX电池组"
         if station_short_name and ("号系统" in p) and (station_short_name in p):
             return f"{station_short_name}{sn}号系统-{seq}电池组"
+
+        if station_short_name and ("#系统" in p) and (station_short_name in p):
+            return f"{station_short_name}{sn}#系统-{seq}电池组"
 
         # 2) 系统序号 + "#系统-XX电池组"
         if "#系统" in p:
@@ -964,6 +972,8 @@ class ExcelWriter:
                 p = cluster_name_example
                 if station_short_name and ("号系统" in p) and (station_short_name in p):
                     cluster_name = f"{station_short_name}{subsystem.serial_number}号系统-{seq_code}电池簇"
+                elif station_short_name and ("#系统" in p) and (station_short_name in p):
+                    cluster_name = f"{station_short_name}{subsystem.serial_number}#系统-{seq_code}电池簇"
                 elif "#系统" in p:
                     cluster_name = f"{subsystem.serial_number}#系统-{seq_code}电池簇"
                 elif "号系统" in p:
@@ -1215,6 +1225,12 @@ class ExcelWriter:
                             ac_name = (
                                 f"{station_short_name}{subsystem.serial_number}号系统-{seq_code}风冷空调"
                             )
+                        elif station_short_name and ("#系统" in p) and (
+                            station_short_name in p
+                        ):
+                            ac_name = (
+                                f"{station_short_name}{subsystem.serial_number}#系统-{seq_code}风冷空调"
+                            )
                         elif "#系统" in p:
                             ac_name = (
                                 f"{subsystem.serial_number}#系统-{seq_code}风冷空调"
@@ -1307,6 +1323,12 @@ class ExcelWriter:
                             cluster_name = (
                                 f"{station_short_name}{subsystem.serial_number}号系统-{seq_code}电池簇"
                             )
+                        elif station_short_name and ("#系统" in p) and (
+                            station_short_name in p
+                        ):
+                            cluster_name = (
+                                f"{station_short_name}{subsystem.serial_number}#系统-{seq_code}电池簇"
+                            )
                         elif "#系统" in p:
                             cluster_name = (
                                 f"{subsystem.serial_number}#系统-{seq_code}电池簇"
@@ -1332,6 +1354,12 @@ class ExcelWriter:
                         ):
                             ac_name = (
                                 f"{station_short_name}{subsystem.serial_number}号系统-{seq_code}液冷空调"
+                            )
+                        elif station_short_name and ("#系统" in p) and (
+                            station_short_name in p
+                        ):
+                            ac_name = (
+                                f"{station_short_name}{subsystem.serial_number}#系统-{seq_code}液冷空调"
                             )
                         elif "#系统" in p:
                             ac_name = (
@@ -1397,6 +1425,12 @@ class ExcelWriter:
                     ):
                         ac_name = (
                             f"{station_short_name}{subsystem.serial_number}号系统-{seq_code}液冷空调"
+                        )
+                    elif station_short_name and ("#系统" in p) and (
+                        station_short_name in p
+                    ):
+                        ac_name = (
+                            f"{station_short_name}{subsystem.serial_number}#系统-{seq_code}液冷空调"
                         )
                     elif "#系统" in p:
                         ac_name = f"{subsystem.serial_number}#系统-{seq_code}液冷空调"
@@ -1580,6 +1614,8 @@ class ExcelWriter:
                 p = fire_name_example
                 if station_short_name and ("号系统" in p) and (station_short_name in p):
                     name = f"{station_short_name}{subsystem.serial_number}号系统-{nnn}{mm}消防设备"
+                elif station_short_name and ("#系统" in p) and (station_short_name in p):
+                    name = f"{station_short_name}{subsystem.serial_number}#系统-{nnn}{mm}消防设备"
                 elif "#系统" in p:
                     name = f"{subsystem.serial_number}#系统-{nnn}{mm}消防设备"
                 elif "号系统" in p:
@@ -1747,6 +1783,7 @@ class ExcelWriter:
             for i in range(energy_meter_count):
                 idx = i + 1
                 seq = f"{idx:02d}"
+                
                 # 默认：场站简称 + 子系统序号 + "#系统-XX储能表"
                 if station_short_name:
                     default_name = (
@@ -1761,6 +1798,12 @@ class ExcelWriter:
                 ):
                     name = (
                         f"{station_short_name}{subsystem.serial_number}号系统-{seq}储能表"
+                    )
+                elif station_short_name and ("#系统" in p) and (
+                    station_short_name in p
+                ):
+                    name = (
+                        f"{station_short_name}{subsystem.serial_number}#系统-{seq}储能表"
                     )
                 elif "#系统" in p:
                     name = f"{subsystem.serial_number}#系统-{seq}储能表"
