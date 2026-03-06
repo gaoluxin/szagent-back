@@ -1490,24 +1490,6 @@ class ExcelWriter:
 
         for subsystem in customer_data.subsystems:
             fire_struct = (subsystem.fire_suppression_structure or "").strip()
-            # 只关心是否大于0，具体数量由电池组/电池簇个数决定
-            try:
-                has_host = int(subsystem.fire_host_count) > 0
-            except (ValueError, TypeError):
-                has_host = False
-            try:
-                has_detector = int(subsystem.fire_detector_count) > 0
-            except (ValueError, TypeError):
-                has_detector = False
-            try:
-                has_suppressor = int(subsystem.fire_suppressor_count) > 0
-            except (ValueError, TypeError):
-                has_suppressor = False
-
-            if not (has_host or has_detector or has_suppressor):
-                logger.info(f"子系统: {subsystem.name} 无消防设备，跳过")
-                continue
-
             try:
                 battery_bank_count = int(subsystem.battery_bank_count)
             except (ValueError, TypeError):
@@ -1519,26 +1501,30 @@ class ExcelWriter:
             mode = subsystem.equipment_structure or ""
             is_dispersed = "系统模式3" in mode
 
-            # 消防设备层级*：结构为1/3时为电池组级，否则为电池簇级
-            is_group_level = any(
-                x in fire_struct for x in ["1", "3", "消防模式1", "消防模式3"]
-            ) and all(x not in fire_struct for x in ["消防模式2", "消防结构2", "2"])
-            fire_level = "电池组级" if is_group_level else "电池簇级"
-            # 消防设备结构为“消防结构2”或“消防模式2”时，按电池簇级所属上级（电池簇）处理
+            # 仅支持 消防模式1（电池组级）与 消防模式2（电池簇级）
+            is_mode1 = "消防模式1" in fire_struct
             is_mode2 = (
                 "消防模式2" in fire_struct
                 or "消防结构2" in fire_struct
                 or fire_struct == "2"
             )
-            is_mixed = "混合" in fire_struct
+            logger.info(f"子系统: {subsystem.name} 消防模式1: {is_mode1}, 消防模式2: {is_mode2}")
+            if not is_mode1 and not is_mode2:
+                logger.info(f"子系统: {subsystem.name} 消防设备结构既非消防模式1也非消防模式2，跳过")
+                continue
 
-            # 从客户收资表 消防设备信息 读取
+            # 消防设备层级*：消防模式1=电池组级，否则=电池簇级
+            fire_level = "电池组级" if is_mode1 else "电池簇级"
+
+            # 从客户收资表 部件信息 一次性读取：消防设备信息、电池簇信息、电池组信息
             fire_manufacturer = subsystem.manufacturer
             fire_model = subsystem.model
             fire_name_example = ""
             has_pack_detector = ""
             has_cluster_detector = ""
             pack_detector_count_val = ""
+            battery_name_example = ""
+            cluster_name_example = ""
             component_key = self._get_component_key(subsystem)
             if component_key in customer_data.component_data:
                 comps = customer_data.component_data[component_key]
@@ -1549,21 +1535,17 @@ class ExcelWriter:
                     fire_name_example = (d.get("名称示例*", "") or "").strip()
                     has_pack_detector = (d.get("是否包含包级探测器") or "").strip()
                     has_cluster_detector = (d.get("是否包含簇级探测器") or "").strip()
-                if "电池簇信息" in comps and (has_pack_detector or "").strip() == "1-yes":
-                    pack_detector_count_val = (
-                        (comps["电池簇信息"].data or {}).get("包含电池包数量", "")
+                if "电池簇信息" in comps:
+                    cluster_data = comps["电池簇信息"].data or {}
+                    if (has_pack_detector or "").strip() == "1-yes":
+                        pack_detector_count_val = (cluster_data.get("包含电池包数量", "") or "").strip()
+                    cluster_name_example = (cluster_data.get("名称示例*", "") or "").strip()
+                if "电池组信息" in comps:
+                    battery_name_example = (
+                        (comps["电池组信息"].data or {}).get("名称示例*", "") or ""
                     ).strip()
 
             bank_names: List[str] = []
-            battery_name_example = ""
-            component_key = self._get_component_key(subsystem)
-            if component_key in customer_data.component_data:
-                comps = customer_data.component_data[component_key]
-                if "电池组信息" in comps:
-                    battery_info = comps["电池组信息"]
-                    battery_name_example = (
-                        (battery_info.data or {}).get("名称示例*", "") or ""
-                    ).strip()
             if battery_bank_count > 0:
                 for i in range(battery_bank_count):
                     bank_names.append(
@@ -1572,7 +1554,7 @@ class ExcelWriter:
                         )
                     )
 
-            # 电池簇名称与序号（与7-电池簇规则一致，按电池组内从01递增）
+            # 电池簇名称与序号（与7-电池簇规则一致，按电池组内从01递增；名称格式按电池簇信息 名称示例*）
             cluster_names: List[str] = []
             cluster_seq_codes: List[str] = []
             if cluster_count > 0:
@@ -1585,6 +1567,7 @@ class ExcelWriter:
                     return min(cluster_index, battery_bank_count - 1)
 
                 seq_map: Dict[tuple, int] = {}
+                p_cluster = cluster_name_example
                 for i in range(cluster_count):
                     bi = _get_bank_index(i)
                     group_no = bi + 1
@@ -1592,9 +1575,17 @@ class ExcelWriter:
                     seq_map[key] = seq_map.get(key, 0) + 1
                     code = f"{group_no}{seq_map[key]:02d}"
                     cluster_seq_codes.append(code)
-                    cluster_names.append(
-                        f"{station_short_name}{subsystem.serial_number}#-{code}电池簇"
-                    )
+                    if station_short_name and ("号系统" in p_cluster) and (station_short_name in p_cluster):
+                        cname = f"{station_short_name}{subsystem.serial_number}号系统-{code}电池簇"
+                    elif station_short_name and ("#系统" in p_cluster) and (station_short_name in p_cluster):
+                        cname = f"{station_short_name}{subsystem.serial_number}#系统-{code}电池簇"
+                    elif "#系统" in p_cluster:
+                        cname = f"{subsystem.serial_number}#系统-{code}电池簇"
+                    elif "号系统" in p_cluster:
+                        cname = f"{subsystem.serial_number}号系统-{code}电池簇"
+                    else:
+                        cname = f"{station_short_name}{subsystem.serial_number}#系统-{code}电池簇" if station_short_name else f"{subsystem.serial_number}#系统-{code}电池簇"
+                    cluster_names.append(cname)
 
             def write_fire_row(
                 fire_type: str,
@@ -1605,7 +1596,7 @@ class ExcelWriter:
                 # MM：消防控制→控制，消防探测→探测，消防抑制→抑制
                 mm = {"消防控制": "控制", "消防探测": "探测", "消防抑制": "抑制"}.get(fire_type, "")
 
-                # 默认名称：场站简称 + 系统序号 + "#系统-NNNMM消防设备"
+                # 默认：场站简称 + 系统序号 + "#系统-NNNMM消防设备"；按名称示例* 四种格式覆盖
                 if station_short_name:
                     default_name = f"{station_short_name}{subsystem.serial_number}#系统-{nnn}{mm}消防设备"
                 else:
@@ -1641,44 +1632,39 @@ class ExcelWriter:
                         sheet.cell(row=data_start_row, column=col_idx, value=mapping[header])
                 data_start_row += 1
 
-            # 消防模式2：数量=电池簇个数，NNN=电池簇编号(3位)，所属上级=电池簇
-            if is_mode2:
-                n_cluster = len(cluster_seq_codes)
-                if has_host and n_cluster:
-                    for i in range(n_cluster):
-                        write_fire_row("消防控制", cluster_seq_codes[i], cluster_names[i])
-                if has_detector and n_cluster:
-                    for i in range(n_cluster):
-                        write_fire_row("消防探测", cluster_seq_codes[i], cluster_names[i])
-                if has_suppressor and n_cluster:
-                    for i in range(n_cluster):
-                        write_fire_row("消防抑制", cluster_seq_codes[i], cluster_names[i])
-                continue
-
-            # 电池组级：数量=电池组个数，NNN=01,02...，所属上级=电池组
-            if is_group_level:
-                if has_host and bank_names:
-                    for i in range(battery_bank_count):
-                        write_fire_row("消防控制", f"{i + 1:02d}", bank_names[i])
-                if has_detector and bank_names:
-                    for i in range(battery_bank_count):
-                        write_fire_row("消防探测", f"{i + 1:02d}", bank_names[i])
-                if has_suppressor and bank_names:
-                    for i in range(battery_bank_count):
-                        write_fire_row("消防抑制", f"{i + 1:02d}", bank_names[i])
-                continue
-
-            # 电池簇级（非分散式）或 混合：主机/抑制机数量=电池组个数，探测器数量=电池簇个数
-            n_cluster = len(cluster_seq_codes)
-            if has_host and bank_names:
+            # 消防模式1：电池组级。显控主机、探测器、抑制机每个电池组各一个；NNN=两位电池组编号，所属上级=电池组名称
+            if is_mode1:
+                if battery_bank_count <= 0:
+                    continue
                 for i in range(battery_bank_count):
                     write_fire_row("消防控制", f"{i + 1:02d}", bank_names[i])
-            if has_detector and n_cluster:
-                for i in range(n_cluster):
-                    write_fire_row("消防探测", cluster_seq_codes[i], cluster_names[i])
-            if has_suppressor and bank_names:
+                for i in range(battery_bank_count):
+                    write_fire_row("消防探测", f"{i + 1:02d}", bank_names[i])
                 for i in range(battery_bank_count):
                     write_fire_row("消防抑制", f"{i + 1:02d}", bank_names[i])
+                continue
+
+            # 消防模式2：电池簇级
+            n_cluster = len(cluster_seq_codes)
+            if is_dispersed:
+                # 系统模式3（分散式）：显控主机、探测器、抑制机每个电池簇各一个；NNN=电池簇编号(3位)，所属上级=电池簇名称
+                if n_cluster:
+                    for i in range(n_cluster):
+                        write_fire_row("消防控制", cluster_seq_codes[i], cluster_names[i])
+                    for i in range(n_cluster):
+                        write_fire_row("消防探测", cluster_seq_codes[i], cluster_names[i])
+                    for i in range(n_cluster):
+                        write_fire_row("消防抑制", cluster_seq_codes[i], cluster_names[i])
+            else:
+                # 系统模式1/2（非分散式）：显控主机每电池组一个；探测器、抑制机每电池簇一个
+                if bank_names:
+                    for i in range(battery_bank_count):
+                        write_fire_row("消防控制", f"{i + 1:02d}", bank_names[i])
+                if n_cluster:
+                    for i in range(n_cluster):
+                        write_fire_row("消防探测", cluster_seq_codes[i], cluster_names[i])
+                    for i in range(n_cluster):
+                        write_fire_row("消防抑制", cluster_seq_codes[i], cluster_names[i])
 
     def _write_meter_sheet(self, customer_data: CustomerData):
         sheet = self.sheets.get("9-电表")
