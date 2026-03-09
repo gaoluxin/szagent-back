@@ -1177,9 +1177,12 @@ class ExcelWriter:
                     return 1
                 return bank_index + 1
 
-            cover_cluster_count = ""
+            # 液冷模式1 下覆盖电池簇数量* 的基础值：电池簇数量 / 电池组数量（无电池组则为电池簇数量）
+            cover_cluster_count_default = ""
             if cluster_count > 0 and battery_bank_count > 0:
-                cover_cluster_count = str(cluster_count // battery_bank_count)
+                cover_cluster_count_default = str(cluster_count // battery_bank_count)
+            elif cluster_count > 0 and battery_bank_count <= 0:
+                cover_cluster_count_default = str(cluster_count)
 
             # 1) 风冷空调：风冷空调数量>0 时，根据风冷空调数量与电池组数量的倍数关系插入记录
             if wind_count > 0:
@@ -1205,6 +1208,9 @@ class ExcelWriter:
                 for bank_index, count in enumerate(counts_per_bank):
                     if count <= 0:
                         continue
+                    # 覆盖电池簇数量*（风冷）= 电池簇数量/电池组数量/每个电池组空调数量
+                    clusters_per_bank = (cluster_count // effective_bank_count) if effective_bank_count else cluster_count
+                    wind_cover_cluster = str(clusters_per_bank // count) if count > 0 and clusters_per_bank else "NULL"
                     group_no = get_group_no(bank_index)
                     for seq_idx in range(count):
                         local_seq = seq_idx + 1
@@ -1260,8 +1266,8 @@ class ExcelWriter:
                             "热管理机组类型*": thermal_type,
                             "热管理机组层级*": thermal_level,
                             "所属舱*": owner_cabin,
-                            "覆盖电池包数量*": "",
-                            "覆盖电池簇数量*": cover_cluster_count,
+                            "覆盖电池包数量*": "NULL",
+                            "覆盖电池簇数量*": wind_cover_cluster,
                             "所属上级节点*": owner_node,
                             "序号*": seq_code,
                             "Scada别名": "",
@@ -1381,8 +1387,8 @@ class ExcelWriter:
                             "热管理机组类型*": thermal_type,
                             "热管理机组层级*": thermal_level,
                             "所属舱*": owner_cabin,
-                            "覆盖电池包数量*": pack_count_from_cluster,
-                            "覆盖电池簇数量*": "",
+                            "覆盖电池包数量*": pack_count_from_cluster if has_liquid_mode2 else "NULL",
+                            "覆盖电池簇数量*": "NULL",
                             "所属上级节点*": cluster_name,
                             "序号*": seq_code,
                             "Scada别名": "",
@@ -1450,6 +1456,7 @@ class ExcelWriter:
                         else ""
                     )
 
+                    # 覆盖电池簇数量*：空调模式1 = 电池簇数量/电池组数量
                     mapping = {
                         "名称*": ac_name,
                         "制造厂家*": liquid_manufacturer,
@@ -1457,8 +1464,8 @@ class ExcelWriter:
                         "热管理机组类型*": thermal_type,
                         "热管理机组层级*": thermal_level,
                         "所属舱*": owner_cabin,
-                        "覆盖电池包数量*": "",
-                        "覆盖电池簇数量*": cover_cluster_count,
+                        "覆盖电池包数量*": "NULL",
+                        "覆盖电池簇数量*": cover_cluster_count_default,
                         "所属上级节点*": owner_node,
                         "序号*": seq_code,
                         "Scada别名": "",
@@ -1508,7 +1515,7 @@ class ExcelWriter:
                 or "消防结构2" in fire_struct
                 or fire_struct == "2"
             )
-            logger.info(f"子系统: {subsystem.name} 消防模式1: {is_mode1}, 消防模式2: {is_mode2}")
+           # logger.info(f"子系统: {subsystem.name} 消防模式1: {is_mode1}, 消防模式2: {is_mode2}")
             if not is_mode1 and not is_mode2:
                 logger.info(f"子系统: {subsystem.name} 消防设备结构既非消防模式1也非消防模式2，跳过")
                 continue
@@ -1686,7 +1693,8 @@ class ExcelWriter:
 
         # 关口表（场站级）
         meter_info = customer_data.meter_info
-        if meter_info:
+        # 需求：如果客户收资表中关口表“名称”未填写，则不生成关口表记录
+        if meter_info and (meter_info.name or "").strip():
             try:
                 gate_count = int(meter_info.count) if meter_info.count else 1
             except (ValueError, TypeError):
@@ -1697,10 +1705,10 @@ class ExcelWriter:
             except ValueError:
                 rated_power_mw = 0.0
 
-            # 斜率*: 按额定功率MW / 2000 计算（若无法解析则留空）
+            # 斜率*: 按额定功率MW * 2000 计算（若无法解析则留空）
             gate_slope = ""
             if rated_power_mw:
-                slope_val = rated_power_mw / 2000.0
+                slope_val = rated_power_mw * 2000.0
                 gate_slope = f"{slope_val:.6f}".rstrip("0").rstrip(".")
 
             for i in range(gate_count):
@@ -1755,7 +1763,7 @@ class ExcelWriter:
                     meter_multiplier = (d.get("倍率*") or d.get("倍率") or "").strip()
                     meter_name_example = (d.get("名称示例*", "") or "").strip()
 
-            # 斜率*: 子系统额定功率(kw) / 2（若无法解析则留空）
+            # 斜率*: 子系统额定功率(kw) * 2（若无法解析则留空）
             try:
                 rated_power_kw = float(str(subsystem.rated_power).strip() or "0")
             except ValueError:
@@ -1763,7 +1771,7 @@ class ExcelWriter:
 
             storage_slope = ""
             if rated_power_kw:
-                slope_val = rated_power_kw / 2.0
+                slope_val = rated_power_kw * 2.0
                 storage_slope = f"{slope_val:.6f}".rstrip("0").rstrip(".")
 
             for i in range(energy_meter_count):
