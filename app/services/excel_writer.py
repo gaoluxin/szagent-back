@@ -146,6 +146,7 @@ class ExcelWriter:
             pcs_connection_type = self._get_pcs_connection_type(subsystem.equipment_structure)
             system_composition = self._get_system_composition(subsystem)
 
+            sn_str = self._format_subsystem_serial(subsystem)
             mapping = {
                 "名称*": subsystem.name,
                 "制造厂家*": subsystem.manufacturer,
@@ -154,7 +155,7 @@ class ExcelWriter:
                 "额定功率*": subsystem.rated_power,
                 "所属升压站进线名称*": subsystem.incoming_line_name,
                 "PCS连接形式*": pcs_connection_type,
-                "序号*": str(subsystem.serial_number),
+                "序号*": sn_str,
                 "Scada别名": "",
                 "已接入系统构成*": system_composition,
                 "模型ID": ""
@@ -206,7 +207,9 @@ class ExcelWriter:
         if subsystem.battery_bank_count and subsystem.battery_bank_count.strip() and subsystem.battery_bank_count.strip() != "0":
             composition_parts.append("BatteryBankView")
 
-        return ",".join(composition_parts)
+        # 当前逻辑下在开头加 "["，末尾加 "]"
+        inner = ",".join(composition_parts)
+        return f"[{inner}]"
 
     def _parse_float(self, value: str):
         if value is None:
@@ -221,6 +224,35 @@ class ExcelWriter:
             return float(m.group())
         except ValueError:
             return None
+
+    def _parse_cell_spec_ah(self, value) -> float | None:
+        """
+        解析「电芯规格(Ah)」数值：若值中含单位（如 Ah、mAh 等），先去除再取数字。
+        """
+        if value is None:
+            return None
+        s = str(value).strip()
+        if not s:
+            return None
+        # 去除常见单位及空白（不区分大小写）
+        s = re.sub(
+            r"(?i)[\s]*(ah|a·h|a\.h|mah|m\s*ah)[\s]*",
+            "",
+            s,
+        )
+        s = s.strip()
+        return self._parse_float(s)
+
+    def _format_subsystem_serial(self, subsystem) -> str:
+        """
+        储能系统、箱变等设备名称中的子系统序号：若为个位数则格式化为 01、02。
+        可解析为整数时统一按至少两位宽度输出（1→01，10→10）。
+        """
+        try:
+            n = int(subsystem.serial_number)
+            return f"{n:02d}"
+        except (ValueError, TypeError):
+            return str(subsystem.serial_number)
 
     def _get_pcs_name(
         self,
@@ -379,7 +411,7 @@ class ExcelWriter:
                 3. 否则若包含“#箱变”                  → 子系统序号 + "#箱变"
                 4. 否则若包含“号箱变”                → 子系统序号 + "号箱变"
                 """
-                sn = subsystem.serial_number
+                sn = self._format_subsystem_serial(subsystem)
                 p = (pattern or "").strip()
 
                 # 1) 场站简称 + 子系统序号 + "#箱变"
@@ -401,12 +433,15 @@ class ExcelWriter:
                 # 回退默认：场站简称 + 子系统序号 + "#箱变"
                 return f"{station_short_name}{sn}#箱变"
 
-            box_transformer_name = f"{station_short_name}{subsystem.serial_number}#箱变"
+            box_transformer_name = (
+                f"{station_short_name}{self._format_subsystem_serial(subsystem)}#箱变"
+            )
 
             box_transformer_type = ""
             cooling_system_type = ""
-            box_transformer_manufacturer = subsystem.manufacturer
-            box_transformer_model = subsystem.model
+            # 未填写则置空，不回填子系统厂家/型号
+            box_transformer_manufacturer = ""
+            box_transformer_model = ""
 
             component_key = self._get_component_key(subsystem)
             if component_key in customer_data.component_data:
@@ -416,16 +451,14 @@ class ExcelWriter:
                     box_transformer_type = transformer_info.box_transformer_type
                     cooling_system_type = transformer_info.cooling_system_type
                     data = transformer_info.data or {}
-                    # 制造厂家/型号优先从客户收资表“箱变信息”里读取（兼容带 * 与不带 *）
+                    # 制造厂家/型号仅从客户收资表“箱变信息”读取，未填则空
                     box_transformer_manufacturer = (
                         data.get("制造厂家*", "").strip()
                         or data.get("制造厂家", "").strip()
-                        or box_transformer_manufacturer
                     )
                     box_transformer_model = (
                         data.get("设备型号*", "").strip()
                         or data.get("设备型号", "").strip()
-                        or box_transformer_model
                     )
                     # 根据“名称示例*”字段决定箱变名称格式（若存在则覆盖默认规则）
                     name_example = (data.get("名称示例*", "") or "").strip()
@@ -440,7 +473,7 @@ class ExcelWriter:
                 "所属系统*": subsystem.name,
                 "EnOS箱变类型*": "双绕组",
                 "冷却系统类型*": cooling_system_type,
-                "序号*": str(subsystem.serial_number),
+                "序号*": self._format_subsystem_serial(subsystem),
                 "Scada别名": "",
                 "模型ID": ""
             }
@@ -485,7 +518,8 @@ class ExcelWriter:
 
             pcs_model = ""
             pcs_rated_power = ""
-            pcs_manufacturer = subsystem.manufacturer
+            # 未填写则置空，不回填子系统厂家
+            pcs_manufacturer = ""
             pcs_name_example = ""
 
             component_key = self._get_component_key(subsystem)
@@ -493,16 +527,19 @@ class ExcelWriter:
                 components = customer_data.component_data[component_key]
                 if "变流器信息" in components:
                     pcs_info = components["变流器信息"]
-                    pcs_model = pcs_info.pcs_model
+                    # 型号/厂家仅从部件信息读取，未填则空
+                    pcs_model = (pcs_info.pcs_model or "").strip()
                     pcs_rated_power = pcs_info.pcs_rated_power
                     if pcs_info.pcs_manufacturer:
-                        pcs_manufacturer = pcs_info.pcs_manufacturer
+                        pcs_manufacturer = (pcs_info.pcs_manufacturer or "").strip()
                     # 客户收资表中“名称示例*”字段（若存在）用于决定名称格式
                     pcs_name_example = (
                         (pcs_info.data or {}).get("名称示例*", "") or ""
                     ).strip()
 
-            box_transformer_name = f"{station_short_name}{subsystem.serial_number}#箱变"
+            box_transformer_name = (
+                f"{station_short_name}{self._format_subsystem_serial(subsystem)}#箱变"
+            )
 
             for i in range(pcs_count):
                 pcs_number = i + 1
@@ -564,35 +601,33 @@ class ExcelWriter:
 
             component_key = self._get_component_key(subsystem)
             cabin_name_example = ""
+            # 未填写则置空，不回填子系统厂家/型号
+            cabin_manufacturer = ""
+            cabin_model = ""
             if component_key in customer_data.component_data:
                 components = customer_data.component_data[component_key]
                 if "舱信息" in components:
                     cabin_info = components["舱信息"]
                     data = cabin_info.data or {}
-                    # 制造厂家：优先用客户收资表“舱信息”里的“制造厂家*”
+                    # 制造厂家/型号仅从客户收资表“舱信息”读取
                     cabin_manufacturer = (
-                        cabin_info.cabin_manufacturer
+                        (cabin_info.cabin_manufacturer or "").strip()
                         or data.get("制造厂家*", "").strip()
-                        or subsystem.manufacturer
+                        or data.get("制造厂家", "").strip()
                     )
-                    # 型号：优先用客户收资表“舱信息”里的“设备型号*”
                     cabin_model = (
-                        cabin_info.cabin_model
+                        (cabin_info.cabin_model or "").strip()
                         or data.get("设备型号*", "").strip()
-                        or subsystem.model
+                        or data.get("设备型号", "").strip()
                     )
                     cabin_name_example = (data.get("名称示例*", "") or "").strip()
                     logger.info(
                         f"找到舱信息: cabin_model={cabin_model}, cabin_manufacturer={cabin_manufacturer}"
                     )
                 else:
-                    cabin_model = subsystem.model
-                    cabin_manufacturer = subsystem.manufacturer
-                    logger.info(f"未找到舱信息，使用子系统制造厂家和型号: {cabin_manufacturer}, {cabin_model}")
+                    logger.info("未找到舱信息，制造厂家/型号置空")
             else:
-                cabin_model = subsystem.model
-                cabin_manufacturer = subsystem.manufacturer
-                logger.info(f"未找到制造厂家的部件信息，使用子系统制造厂家和型号: {cabin_manufacturer}, {cabin_model}")
+                logger.info("未找到部件信息，舱制造厂家/型号置空")
 
             for i in range(cabin_count):
                 cabin_number = i + 1
@@ -662,8 +697,9 @@ class ExcelWriter:
                 f"处理子系统: {subsystem.name}, 模式: {mode}, 变流器数量: {pcs_count}, 电池组数量: {battery_bank_count}"
             )
 
-            battery_manufacturer = subsystem.manufacturer
-            battery_model = subsystem.model
+            # 未填写则置空，不回填子系统厂家/型号
+            battery_manufacturer = ""
+            battery_model = ""
             battery_rated_capacity = ""
             battery_name_example = ""
 
@@ -676,9 +712,14 @@ class ExcelWriter:
                     battery_info = components["电池组信息"]
                     data = battery_info.data or {}
                     battery_manufacturer = (
-                        data.get("制造厂家*", "").strip() or battery_manufacturer
+                        data.get("制造厂家*", "").strip()
+                        or data.get("制造厂家", "").strip()
                     )
-                    battery_model = data.get("型号*", "").strip() or battery_model
+                    battery_model = (
+                        data.get("型号*", "").strip()
+                        or data.get("设备型号*", "").strip()
+                        or data.get("设备型号", "").strip()
+                    )
                     battery_name_example = (data.get("名称示例*", "") or "").strip()
                     # 兼容旧表头“额定容量*”/“额定容量(kWh)”和新表头“额定容量(kW)*”
                     battery_rated_capacity = (
@@ -803,8 +844,9 @@ class ExcelWriter:
                 f"处理子系统: {subsystem.name}, 模式: {mode}, 电池簇数量: {cluster_count}, 电池组数量: {battery_bank_count}, 舱数量: {cabin_count}, PCS数量: {pcs_count}"
             )
 
-            cluster_manufacturer = subsystem.manufacturer
-            cluster_model = subsystem.model
+            # 未填写则置空，不回填子系统厂家/型号
+            cluster_manufacturer = ""
+            cluster_model = ""
             cluster_rated_capacity = ""
             cell_count = ""
             pack_count = ""
@@ -819,12 +861,13 @@ class ExcelWriter:
                     cluster_info = components["电池簇信息"]
                     data = cluster_info.data or {}
                     cluster_manufacturer = (
-                        data.get("制造厂家*", "").strip() or cluster_manufacturer
+                        data.get("制造厂家*", "").strip()
+                        or data.get("制造厂家", "").strip()
                     )
                     cluster_model = (
                         data.get("设备型号*", "").strip()
+                        or data.get("设备型号", "").strip()
                         or data.get("型号*", "").strip()
-                        or cluster_model
                     )
                     # 兼容旧表头“额定容量*”/“额定容量(kWh)”和新表头“额定容量(kwh)*”
                     cluster_rated_capacity = (
@@ -853,12 +896,13 @@ class ExcelWriter:
                 charge_power = power_str
                 discharge_power = power_str
 
-            # 计算充放电额定电压
-            cell_spec_num = self._parse_float(cell_spec)
+            # 计算充放电额定电压：电池簇额定容量 / 电芯规格 * 1000
+            # 电芯规格取自「电芯规格(Ah)」，含单位时先去除再解析
+            cell_spec_num = self._parse_cell_spec_ah(cell_spec)
             charge_voltage = ""
             discharge_voltage = ""
             if cluster_capacity_num not in (None, 0) and cell_spec_num not in (None, 0):
-                voltage_value = cluster_capacity_num / cell_spec_num
+                voltage_value = cluster_capacity_num / cell_spec_num * 1000.0
                 voltage_str = f"{voltage_value:.4f}".rstrip("0").rstrip(".")
                 charge_voltage = voltage_str
                 discharge_voltage = voltage_str
@@ -1086,11 +1130,12 @@ class ExcelWriter:
             # 制造厂家*、设备型号*：
             # - 风冷空调来自“风冷空调信息”
             # - 液冷空调来自“液冷空调信息”
-            wind_manufacturer = subsystem.manufacturer
-            wind_model = subsystem.model
+            # 未填写则置空，不回填子系统厂家/型号
+            wind_manufacturer = ""
+            wind_model = ""
             wind_name_example = ""
-            liquid_manufacturer = subsystem.manufacturer
-            liquid_model = subsystem.model
+            liquid_manufacturer = ""
+            liquid_model = ""
             pack_count_from_cluster = ""
 
             component_key = self._get_component_key(subsystem)
@@ -1524,8 +1569,9 @@ class ExcelWriter:
             fire_level = "电池组级" if is_mode1 else "电池簇级"
 
             # 从客户收资表 部件信息 一次性读取：消防设备信息、电池簇信息、电池组信息
-            fire_manufacturer = subsystem.manufacturer
-            fire_model = subsystem.model
+            # 未填写则置空，不回填子系统厂家/型号
+            fire_manufacturer = ""
+            fire_model = ""
             fire_name_example = ""
             has_pack_detector = ""
             has_cluster_detector = ""
@@ -1537,8 +1583,12 @@ class ExcelWriter:
                 comps = customer_data.component_data[component_key]
                 if "消防设备信息" in comps:
                     d = (comps["消防设备信息"].data or {})
-                    fire_manufacturer = (d.get("制造厂家*") or d.get("制造厂家") or "").strip() or fire_manufacturer
-                    fire_model = (d.get("设备型号*") or d.get("设备型号") or "").strip() or fire_model
+                    fire_manufacturer = (
+                        d.get("制造厂家*") or d.get("制造厂家") or ""
+                    ).strip()
+                    fire_model = (
+                        d.get("设备型号*") or d.get("设备型号") or ""
+                    ).strip()
                     fire_name_example = (d.get("名称示例*", "") or "").strip()
                     has_pack_detector = (d.get("是否包含包级探测器") or "").strip()
                     has_cluster_detector = (d.get("是否包含簇级探测器") or "").strip()
@@ -1719,7 +1769,7 @@ class ExcelWriter:
                     "制造厂家*": meter_info.manufacturer,
                     "设备型号*": meter_info.model,
                     "电表所属层级*": "场站级",
-                    "类型*": "关口表",
+                    "类型*": "出线关口表",
                     "倍率*": meter_info.multiplier,
                     "接入模式*": "正接",
                     "所属系统": "",
@@ -1744,8 +1794,9 @@ class ExcelWriter:
             if energy_meter_count <= 0:
                 continue
 
-            meter_manufacturer = subsystem.manufacturer
-            meter_model = subsystem.model
+            # 未填写则置空，不回填子系统厂家/型号
+            meter_manufacturer = ""
+            meter_model = ""
             meter_multiplier = ""
             meter_name_example = ""
 
@@ -1755,10 +1806,10 @@ class ExcelWriter:
                 if "储能表信息" in comps:
                     d = comps["储能表信息"].data or {}
                     meter_manufacturer = (
-                        (d.get("制造厂家*") or d.get("制造厂家") or meter_manufacturer)
+                        d.get("制造厂家*") or d.get("制造厂家") or ""
                     ).strip()
                     meter_model = (
-                        (d.get("设备型号*") or d.get("设备型号") or meter_model)
+                        d.get("设备型号*") or d.get("设备型号") or ""
                     ).strip()
                     meter_multiplier = (d.get("倍率*") or d.get("倍率") or "").strip()
                     meter_name_example = (d.get("名称示例*", "") or "").strip()
